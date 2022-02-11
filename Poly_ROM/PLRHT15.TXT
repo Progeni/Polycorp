@@ -1,0 +1,457 @@
+.PLRHT12      23 4 82        FILE LOAD ROUTINES REMOVED
+.PLRHT11      3:2:82         HIGH SPEED COMM ADDED
+.PLRHT00      23:12:81       TESTING WITH OLD KEY BOARD , OLD COMM
+.PLRH00       19.11.81       1982 RELEASE POLY ROM 
+
+
+*
+         PROC
+IRQ_ENTRY:
+
+         LDA   #DIRECT
+         TFR   A,DP          SET DIRECT PAGE
+CHECK_INT:
+
+*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+.   COMMS ROUTINES CHECKED HERE, IMPLEMENTED IN PLRIxx
+
+.+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+COMMS_INT
+         LDA   CSR1          READ ADLC STATUS REG. TO SEE IF COMMS INTERRUPT
+AI0      BITA  #S1RDA        RDA?
+         BNE   AI1           YES
+         BITA  #S1S2R        STATUS REG 2?
+         BEQ   PTM_INT       NO-  SEE IF TIMER INT
+         JSR   RCOND              PROCESS                              AND
+         BRA   AI2
+        
+AI1      LDA   RXD           READ BYTE FROM ADLC
+         JSR   [JRD]         PROCESS
+AI2      LDA   CSR1          ADLC STATUS REG
+         BMI   AI0           FURTHER CONDITIONS NEED PROCESSING
+.FAST EXIT FROM INTERRUPT
+
+         LDA   USERFLG       INTERUPTED OUT OF USER PROG?
+         BEQ   IEFE          NO
+         STA   PROTECT
+IEFE     RTI
+         END
+
+
+*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+.
+. PROGRAMMABLE TIMER INTERRUPT SERVICE ROUTINE
+.
+.+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+.
+. This routine checks to see if the interrupt was from the 
+. real time clock, in which case it is updated, or whether
+. it was from the user's use of the timer in which case the
+. interrupt acknowledged and the timer No passed to the user
+. timer interrupt routine.
+.
+.+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+         PROC
+
+PTM_INT:
+         LDA   TIMSTAT       INTERRUPT FROM TIMER ?
+         BPL   NOTPTM        NO
+         CLRB                GENERATE IN B A NUMBER CORRESPONDING
+LP1      INCB                TO THE TIMER NUMBER THAT GENERATE THE INT
+         RORA
+         BCC   LP1
+         LDX   #TIMER        POINTS TO TIMER
+         ABX                 ADD 1 TIME OF B TO X
+         LDX   B,X           ACKNOWLEDGE CORRECT TIMER REG (DUMMY) INT
+         TST   CLOCKFLG      TEST CLOCK FLAG
+         BEQ   USERTIM       CLOCK NOT RUNNING-MUST BE USER INT.
+         BITA  #1            TIMER1 INT?
+         BEQ   USERTIM       NO - MUST BE USER INT.
+.INCREMENT COMMS TIMEOUT COUNTER
+         INC   COMTIM
+         BNE   PI1           NOT YET BEYOND 255
+         DEC   COMTIM
+.INCREMENT 10 mSECOND TIME COUNTER
+PI1      LDD   TIMELS        YES REAL TIME CLOCK INTERRUPT
+         ADDD  #100          INCR BY 100 UNITS OF 10 MSEC.
+         STD   TIMELS        SAME. USED IN TIME, WAIT.
+         BCC   INCDD         NO CARRY TO MOST SIGNIFICANT TIME BYTE
+         INC   TIME          CARRY OVER TO MS BYTE OF THE THREE
+INCDD    LDX   TIME          GET 2 MS BYTES OF TIME
+         CMPX  #$83D6        24 x 3600 x 100 = 8640000=$83D600
+         BLO   PI2           NO
+         CLR   TIME          WRAP CLOCK AROUND AT MIDNIGHT
+         CLR   TIME+1
+PI2      INC   SECFLG
+         BRA   PTM_DONE
+USERTIM  STB   TIMIFLG       TIMER INT FLAG
+PTM_DONE INC   INTFLG
+PTM_END JMP    IRQ_EXIT       DONE
+NOTPTM
+         END
+
+***************************************************************************
+ 
+. NAME:        RS232SERVICE
+. FUNCTION:    RS232 PORT SERVICE ROUTINE
+. DESCRIPTION: This routine transfers control to a user interrupt
+.              service routine at the address in USERVECT.
+.              (THIS ROUTINE DOES NOT WORK IF INTERRUPT OCCURRED
+.               DURING A SWI CALL.)
+ 
+***************************************************************************
+ 
+         PROC
+RS232SVC:
+         TST   PORTFLG         IS THERE AN ACIA
+         BNE   NOTRS232
+         LDB   ACIAS
+         BPL   NOTRS232
+         TST   TERMFLG         IS IT IN TERMINAL MODE
+         BEQ   RSINT2
+         LDD   CHRCOUNT        INCR CHAR COUNT
+         ADDD  #1
+         STD   CHRCOUNT
+         LDX   EQPTR           END OF QUEUE PTR
+         CMPX  #ENDBUF         IS IT AT END OF BUFFER
+         BLO   RSINT3
+         LDX   #STRBUF         OTHERWISE LOAD START OF BUFFER
+RSINT3   LDA   ACIAD           LOAD THE DATA
+         STA   0,X+
+         STX   EQPTR           UPDATE END OF QUEUE PTR
+         RTI                   IMMEDIATE RETURN
+
+RSINT2   LDA   ACIAD           LOAD DATA REG
+         STD   UD,U
+         INC   RS232FLG
+         INC   INTFLG
+RSINT4   JMP   IRQ_EXIT
+NOTRS232
+         END
+ 
+***************************************************************************
+
+. NAME:        KEYSERVICE
+. FUNCTION:    KEYBOARD SERVICE ROUTINE
+. CALLS:       MASK
+. DESCRIPTION: This routine services the interrupt from the keyboard.
+.              First, the character is obtained from the Keyboard PIA, and is
+.              translated to its required code.
+.              If the key has its interrupt bit set, it will be serviced as an interrupt,
+.              by setting an appropriate flag, which will be serviced on exit from the
+.              Int. Routines.
+.              Otherwise, "normal" action will be taken, such as Exit interrupt,
+.              Pauseflag setting, returning value of Key to Bufchar, Bufstat.
+
+         PROC
+SKY      EQU   -1
+
+KEYSVC:
+         LDB   KEYBDC        Keyboard Interrupt?
+        LBPL   IRQ_EXIT          Get out of interrupt service routine
+
+KEYBOARD LDB   KEYBD         Get Data and reset IRQ.
+         ANDB  #$7F          Strip Data strobe bit.
+         .B holds the char. as received from KBD H/Ware.
+         LDA   #-1           Assume not an interruptable key.
+         CMPB  #$1F          Control Key?
+         BLE   LESS0         Yes - look up table.
+         CMPB  #$3F          Printable?
+         BLE   ASIS          Yes - use it as is.
+         CMPB  #$40          Parallel Bars?
+         BLE   LESS20        Yes - Subtract 32 and look up table.
+         CMPB  #$5A          A - Z?
+         BLE   ASIS          Yes - use it as is.
+         CMPB  #$60          Special chrs.?
+         BLE   LESS3A        Yes - Subtract 58 and look up table.
+         CMPB  #$7A          a - z?
+         BLE   ASIS          Yes - Use as is.
+LESS54   SUBB  #$1A          Must be special chrs above $7A Subtract 84
+LESS3A   SUBB  #$1A          Subtr 58 here.
+LESS20   SUBB  #$20          Subtr 32 here.
+
+LESS0    LDX   #CHARTABLE    Point to Char Translation Table.
+         ASLB                Double char pointer offset.
+         LDD   B,X           Pick up A = Char, B = Int. bit. no.
+         BPL   NOTSOFT       Branch if not soft key.
+         LDX   #SOFTKEYTBL   Point to soft key table.
+         LDA   B,X           Use B as index into table.
+NOTSOFT  EXG   A,B           Put char in B, Int. bit no in A.
+         BRA   CHKSPACE
+
+ASIS     CMPB  #$23         IS IT ASCII "#"
+         BNE   CHKSPACE       NO
+         LDB   #$5F         YES TRANSLATE TO TELETEXT CHAR
+
+CHKSPACE CMPB  #" "          Space bar pressed?
+         BEQ   INTTST        Yes don't reset pause status
+         CLR   PSEFLG        No.Any other key reset pause status
+INTTST   TSTA                Does this key have an interrupt bit?
+         BMI   STDKEY        No it doesn't
+         PSHS  D             Yes - see if it is enabled.
+         TFR   A,B           Put Interrupt No. in D.
+         LSRA;LSRA;LSRA      CONVERT A TO DISPL
+         ANDB  #7            GET BIT NO
+         LDX   #MASKTBL
+         LDB   B,X           GET BIT MASK
+         LDX   #KEYBITMAP    Point to Keyboard interrupt bit map.
+         ANDB  A,X           Test bit.
+         BEQ   NOINTBIT      No Interrupt enabled.
+         PULS  D             Get back Int. bit no in A, char in B
+         INCA                MAKE SURE IT IS NON ZERO
+         STA   KEYINTFG      Set interrupt flag with key no.
+         BRA   SETINT        Done (for now) check ints. on exit from Int. Service Routine.
+NOINTBIT PULS  D             Get back Char in B, Int bit no in A.
+
+STDKEY                       .HERE IFF the key does not have its interrupt bit set
+CHECKPSE CMPB  #PSEKEY       Is it a pause key?
+         BNE   CHEKEXIT      No
+         STB   PSEFLG
+         BRA   SETINT
+CHEKEXIT
+                             .and it was not either Pause or Shift Pause.
+         CMPB  #EXITKEY      Is it the exit key?
+         BNE   CHEKHELP
+         STB   EXITFLG       Set Exit flag for later action.
+         BRA   SETINT        Set the Int Flag and get out
+
+CHEKHELP                    .CHECK for Help key here.
+         CMPB  #HELPKEY      Is it the help key ?
+         BNE   CHEKCALC      No
+         TST   CHRINFLG      Have we interrupted out of Character In routine ?
+         BEQ   ENDKEYS       Not in Chr In : IGNORE key !
+         STB   HELPFLG       Was in Chr In : Use the key to make an interrupt
+         BRA   SETINT        And set the Interrupt Flag
+
+CHEKCALC                     .CHECK for Calc Key here.
+         CMPB  #CALCKEY      Is it the calc key ?
+         BNE   SAVEKEY       No
+         TST   CHRINFLG      Have we interrupted out of Character In routine ?
+         BEQ   ENDKEYS       Not in Chr In : IGNORE key !
+         STB   CALCFLG       Was in Chr In : Use the key to make an interrupt
+SETINT   STB   INTFLG        Set the Interrupt Flag to a positive value to indicate keyboard Int
+         CLRB
+         BRA   STOREIT
+
+SAVEKEY                      .Save key into key buffer.
+         LDX   GKINTVEC      General kbd vector set?
+         CMPX  #SYSTEM       
+         BHS   STOREIT       No-go and store the key obtained.
+         STB   GKINTFLG      Yes set interrupt flag
+         BRA   SETINT        and exit.
+STOREIT
+         STB   BUFCHAR       Put character into buffer (1 char length)
+         LDB   #1            Char present status in case.
+NO_OURN  STB   BUFSTAT       Save status byte.
+.                            Done.
+
+ENDKEYS  BRA  IRQ_EXIT
+
+
+CHARTABLE
+         FCB   $00,-1        No key assigned, return untranslated code
+         FCB   SKY,3         Softkey 3
+         FCB   $02,-1        No key assigned, return untranslated code
+         FCB   $03,-1        No key assigned, return untranslated code
+         FCB   $04,-1        No key assigned, return untranslated code
+         FCB   $05,-1        No key assigned, return untranslated code
+         FCB   SKY,6         Softkey 6
+         FCB   $07,-1        No key assigned, return untranslated code
+         FCB   $19,21        Cursor Up.
+         FCB   $40,28        @
+         FCB   SKY,8         Softkey 8
+         FCB   $18,20        Cursor Down
+         FCB   $0C,-1        No key assigned, return untranslated code
+         FCB   $0D,12        Enter
+         FCB   $1B,27        Shift Pause.
+         FCB   $1C,11        Pause
+         FCB   $10,-1        No key assigned, return untranslated code
+         FCB   $09,19        Cursor Right
+         FCB   $17,17        Calculator
+         FCB   $23,29        Pounds
+         FCB   $14,-1        No key assigned, return untranslated code
+         FCB   SKY,1         Softkey 1
+         FCB   SKY,0         Softkey 0
+         FCB   SKY,9         Softkey 9
+         FCB   SKY,2         Softkey 2
+         FCB   SKY,5         Softkey 5
+         FCB   SKY,7         Softkey 7
+         FCB   $1B,-1        No key assigned, return untranslated code
+         FCB   $1C,-1        No key assigned, return untranslated code
+         FCB   $16,16        Help
+         FCB   $2E,26        Decimal point on keypad
+         FCB   $08,18        Cursor Left
+         FCB   $7C,31        Vertical Bars
+         FCB   $01,22        Character Insert
+         FCB   $1A,10        Exit
+         FCB   $13,13        Next
+         FCB   $12,25        Line Delete
+         FCB   $5F,-1        No key assigned, return untranslated code
+         FCB   $5E,30        Exponential ^
+         FCB   $11,24        Line Insert
+         FCB   $15,15        Back
+         FCB   $14,14        Repeat
+         FCB   $02,23        Character Delete
+         FCB   SKY,4         Softkey 4
+
+
+         END
+
+
+
+***************************************************************************
+
+. NAME    :    Interrupt Exit
+. CALLS   :    STACKINT,STACKFAST
+. DESTROYS:    MOST
+
+
+         PROC
+
+SWI_EXIT:
+         SEI                 Disable ints while we reset USER mode flag
+         INC   USERFLG       to "USER"
+.Now check if any IRQ flags set during SWI
+IRQ_EXIT:
+FIRQ_EXIT:                   .Just in Case!
+NMI_EXIT:                    .Just in Case!
+         TST   USERFLG       What mode are we returning to?
+         BEQ   INT_EXIT      Was system mode - Don't protect before RTI
+         TST   INTFLG        .Here from SWI's or IRQs which are only one level of interrupt
+         BEQ   INT_PROT      .above user mode - we will now stack any pending
+         CLR   INTFLG        .user interrupts, and return via protect.
+.         LDB   LOADERFG      Load started?
+.         BRA   EXITTEST      No go and see if any Interrupts need stacking
+.         CLR   USERFLG       Yes Now back in "system" mode
+.         CLI                 while we enable interrupts for the loader
+.CHKLOAD  LDB   LOADEDFG      Still loading ? or Now Loaded?
+.         BEQ   CHKLOAD       Still loading!
+.         SEI
+.         INC   USERFLG       LOADED! turn off ints set USER mode flag
+.         LDA   #3            Now get Xfer address
+.         LDY   #LOADERTBL+15 Point to Xfer addresses
+.FINDADR  LEAY  -5,Y          Decrement to point to higher level Xfer addr
+.         LDX   0,Y           Pick up Xfer address
+.         CMPX  #SYSTEM       Check valid addr
+.         BLO   GOTADR
+.         DECA                Try next
+.         BNE   FINDADR
+.GOTADR   STX   UX,U          A = 0 if no Xfer addr
+.         LDB   RUNFLG
+.         BEQ   SWIX_EXIT     Load only request:Done
+.         TSTA                was there an addr?
+.         BEQ   NOADR         No transfer address for a run file
+.         STX   UPC,U         Store new PC. = "JUMP" to
+.        BRA   SWIX_EXIT
+.NOADR    LDB   PCORPFLG      Polycorp mode with NO ADDR ?
+.         LBNE  LOGOFF_ENTRY  Yes LOGOFF
+.         JMP   ERROR_SET     No Return error to user
+RS232TEST
+         TST   RS232FLG      IF RS232 MUST PRESERVE A,B REGS
+         BEQ   EXITTEST      No
+         CLR   RS232FLG
+         LDX   USERVECT
+         BSR   STACKINT
+         BRA   INT_PROT      SKIP OVER ALL OTHER TEST
+EXITTEST LDB   EXITFLG       Exit Key interrupt?
+         BEQ   SECTEST       no
+         LDX   EXITVECT      Pick up exit vector
+         CLR   EXITFLG       Acknowledge.
+         BSR   STACKFAST     Stack it (short stack)
+SECTEST  LDB   SECFLG        One second up ?
+         BEQ   KEYTEST       No
+         CLR   SECFLG        Yes - Acknowledge
+         LDX   SECVECT       Pick up vector
+         BSR   STACKFAST     Stack short interrupt regs
+KEYTEST  LDB   KEYINTFG      Has a user definable keyboard interrupt occurred? Pick up Key No.
+         BEQ   CALCTEST      no - try calc key
+         CLR   KEYINTFG      Set keyboard int flag negative, i.e. clear it.
+         DECB
+         LDX   KEYVECT       Pick up keyboard vector.
+         BSR   STACKINT      Stack the interrupt vectors on the S Stack
+CALCTEST LDB   CALCFLG       Calc key pressed ?
+         BEQ   HELPTEST      No
+         CLR   CALCFLG       Yes - Acknowledge
+         LDX   CALCVECT      Pick up vector
+         BSR   STACKFAST     Stack short interrupt regs
+HELPTEST LDB   HELPFLG       Help key pressed ?
+         BEQ   GKEYTEST      No
+         CLR   HELPFLG       Yes - Acknowledge
+         LDX   HELPVECT      Pick up vector
+         BSR   STACKFAST     Stack short interrupt regs
+GKEYTEST LDB   GKINTFLG      General keyboard interrupt?
+         BEQ   TIMTEST        No
+         CLR   GKINTFLG
+         LDX   GKINTVEC
+         BSR   STACKINT
+TIMTEST  LDB   TIMIFLG       Timer interrupts?  Pick up timer no.
+         BEQ   INT_PROT      No
+         CLR   TIMIFLG       Yes - acknowledge
+         LDX   TIMVECT       Pick up Timer Vector
+         BSR   STACKINT      Stack Regs.
+
+INT_PROT CLRB                Set D.P. to zero before return in case user int. or exit int.
+         TFR   B,DP
+
+SWIX_EXIT
+SWI2_SERVICE:
+SWI3_SERVICE:
+         STB   PROTECT       Back to user - Must protect System,
+
+INT_EXIT RTI                 and Return from Interrupt.
+
+
+BKPT_EXIT:
+         CLR   BKPTFLG
+         LDX   BKPTVECT
+         BSR   STACKFAST
+         BRA   INT_PROT
+
+***************************************************************************
+
+.NAME    :      STACKINT,STACKFAST
+.FUNCTION:      STACK Registers to simulate an interrupt stack
+.ON ENTRY:      X holds vector to be used as P.C., for STACKINT,
+.               B holds parameter to be passed in B.
+.DESTROYS:      B,Y,CC
+.              STACKINT:
+.                          Push registers on the stack to simulate an IRQ
+.                          interrupt, where a parameter is to be passed in
+.                          the B-register.  The only registers which are really
+.                          meaningful are PC = Vector, DP = 0, B = parameter,
+.                          CC has E-bit set (IRQ's enabled).
+.              STACKFAST:
+.                          Where no parameter is to be passed, simulate a
+.                          fast interrupt stack, where PC = vector, CC has
+.                          E bit cleared (IRQ's enabled).
+.                          Note DP is set to zero before RTI in case a "fast"
+.                          interrupt was stacked by this routine.
+STACKINT:
+         CMPX  #SYSTEM       Out of range or Disabled?
+         BHS   ST_END        Yes - Ignore by not stacking registers.
+         PSHS  U,Y,X         Put U,Y,X regs on stack.  (note X is also P.C.)
+         CLR   0,-S          Set DP on stack to 0
+         PSHS  D             Set up A, and B Holds Parameter to be returned.
+         LDB   #$90          EfhInzvc  Set Entire bit of CCR.
+         PSHS  B             Put CC on stack
+         LDY   10,S          Pick up subroutine return address
+         STX   10,S          Substitute X as Prog. Ctr on stack
+         JMP   0,Y           RETURN to caller of this routine.
+
+STACKFAST:
+         CMPX  #SYSTEM       Out of range or disabled?
+         BHS   ST_END        Yes - ignore.
+         LDY   0,S           Get return addr. of subroutine.
+         STX   0,S           Put vector on stack.
+         CLR   0,-S          Simulate Fast Interrupt Stack - CC = efhinzvc
+         JMP   0,Y           Return to caller of this routine
+
+ST_END:  RTS                 If no action by either STACKINT or STACKFAST
+         END
+
+
+
+MASKTBL  FCB   1,2,4,8,16,32,64,128

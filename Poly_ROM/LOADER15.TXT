@@ -1,0 +1,70 @@
+.INTERRUPT-LEVEL BINARY LOADER
+.19/6/81
+
+.ENTER WITH COMMS BUFFER CONTAINING LOAD DATA
+
+LOADER   TST   MSGFLG        ERROR OCCURRED?
+         BNE   LDRET         YES -IGNORE BUF
+         LDA   TYPE
+         CMPA  #LOAD         LOAD BUF?
+         BNE   LD45          NO
+
+.X = ADR BUF CONTAINING LOAD DATA
+         LDX   BUFST         X POINTS TO START OF BUFFER
+         LDD   LOADJ         CONTINUATION ADR
+         PSHS  D             PLACE ON STK
+         LDD   BUFP          DATA END
+         SUBD  BUFST         CALC DATA LGH -> B
+         BRA   LD30
+
+.SUBROUTINE TO GET NEXT BYTE
+GETBYTE  DECB                DECR COUNT
+         BEQ   LD40          END OF BUF
+LD30     LDA   ,X+           GET BYTE
+LDRET    RTS
+
+.END OF BUF -SAVE CONTINUATION ADR
+LD40     PULS  X             GET RET ADR
+         STX   LOADJ         SAVE  
+LD45     JMP   LOAD_NEXT     OPEN BUF FOR MORE DATA
+
+.MAIN LOOP OF LOAD
+LOADST   CMPA  #2            LOAD ADDR?
+         BEQ   LD50          YES
+         CMPA  #4            END OF LOAD
+         BEQ   LD47
+         CMPA  #$16          XFER ADDR?
+         BNE   LDNXB         NO
+.IGNORE XFER ADDR
+         BSR   GETBYTE
+         BSR   GETBYTE
+         BRA   LDNXB
+
+LD47     BSR   GETBYTE
+         STA   ENDLOD
+         BRA   LDNXB
+
+.GET LOAD ADDR
+LD50     BSR   GETBYTE
+         STA   LOADADR
+         BSR   GETBYTE
+         STA   LOADADR+1
+.GET BYTE COUNT
+         BSR   GETBYTE
+         STA   BYTECNT
+.GET BYTES AND STORE
+         LDY   LOADADR
+LDLP     DECB                DECR BUF COUNT
+         BNE   LD60          END OF BUF
+         STY   LOADADR       SAVE DURING WAIT
+         BSR   LD40          GET NEXT BUFFERFUL
+         LDY   LOADADR       RESTORE LOAD ADR
+         BRA   LD65
+LD60     LDA   ,X+           GET BYTE
+LD65     STA   ,Y+           STORE AT ADDR
+         DEC   BYTECNT       DECR LOAD COUNT
+         BNE   LDLP          LOOP
+.NEXT BYTE
+LDNXB    BSR   GETBYTE
+         BRA   LOADST
+

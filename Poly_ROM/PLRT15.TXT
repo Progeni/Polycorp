@@ -1,0 +1,53 @@
+.PLRT15        15 JUN 82     VERSION 2 O.S. AND CHANGE IN COMM
+.PLRT12        22 APR 82     FIXED COMM ERROR ,LINE INSERT,DELETE ADDED
+.                            FILE LOAD,RUN CODES TAKEN OUT
+.PLRT12        6 APR 82      CURSOR BUGS FIXED
+.PLRT11        3 2 82        NEW HIGH SPEED COMM
+.PLRT10        12 JAN 82     ADAPT TO NEW KEYBOARD
+.PLRT00        22 DEC 81     ADAPT TO OLD COMMS FOR TESTING BASIC
+.PLRM00        25-NOV-81     NEW 1982 RELEASE ROM - FIRST EDITION
+
+
+
+.*********************************************************************
+.
+.                      POLY SYSTEM ROM
+.
+.*********************************************************************
+
+
+
+
+.        OPT   NL
+SYSROM   EQU   $F000         START OF SYSTEM ROM
+
+         ORG   SYSROM        START CODE AT BEGINNING OF ROM
+         SETDP VARS1         SET DIRECT PAGE FOR ASSEMBLER
+
+VERMSG   FCB   HT,HT,SI,RED,YEAR,MONTH,DAY,NUL
+
+CONTROM  EQU   *             REMEMBER ORIGIN
+
+.        OPT   NL
+         LIB   PLRAT15        INCLUDE EQUATES AND ORIGIN
++
+         LIB   PLRBT15        VARIABLES
++
+         ORG   CONTROM
+
+         LIB   PLTCD15       PLRC PLRD COMBINED
++
+         LIB   PLRE15        SOFTWARE INTERRUPT CALLING ROUTINE
+         LIB   PLRF13        SOFTWARE INTERRUPTS PART A
+         LIB   PLRG15        PLUS PART B OF SWI's
++
+         LIB   PLRHT15        IRQ SERVICE ROUTINES AND INTERRUPT EXITS
++
+         LIB   PLRIT15       COMMS PACKAGE INCLUDING COMMS INTERRUPTS
+         LIB   LOADER15
++
+         LIB   PLRJ15        TELETEXT SCREEN DRIVERS
++
+         LIB   PLRKT00        MEMORY MAP TABLE + INT VECTORS
+
+         END

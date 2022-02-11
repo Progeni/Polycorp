@@ -1,0 +1,161 @@
+.PLRE00       19.11.81       OLD NAME IS SSICAL00 AND SSWIA01
+SWI_SERVICE
+         LEAU  0,S          Mark stack.
+         LDA   #DIRECT      SET UP DIRECT PAGE REGISTER
+         TFR   A,DP   
+         CLR   USERFLG
+         TST   BKPTFLG       IS IT A BREAKPOINT INTERRUPT
+         LBNE  BKPT_EXIT
+         LDX   UPC,U         GET USERS PC WHICH POINTS TO THE FUNCTION BYTE
+.                             FOLLOWING THE SWI CALL
+         LDB   ,X+           GET SWI No. AND INCREMENT USERS PC
+         STX   UPC,U         STORE INCREMENTED PC
+
+         LDA   UCC,U        LOAD USER CC
+         ANDA  #%11010000    CLEAR CARRY AND hnzvc BUT NOT i
+         CMPB  #45           IS IT AN RS232 INTERRUPT?
+         BHI   LLCONT        YES
+         CLI                 NO, SO ALLOW THEM AGAIN
+         ANDA  #%11000000   CLEAR CARRY AND hinzvc
+LLCONT   STA   UCC,U         SET CONDITION CODE
+
+         CLRA                D:=B(SWI NO.) * 2
+         ASLB
+         ROLA
+
+         CMPD  #VECTOR_TBL_END-VECTOR_TBL_BEGIN
+         BHS   NOTFOUND        BRANCH IF BAD SWI NO.
+
+         LDY   CURSVARS      POINT Y TO CURRENT SCREEN VARIABLES
+         LEAX  VECTOR_TBL_BEGIN,PCR
+         JSR   [D,X]         JSR TO ADDR. POINTED AT BY VECTOR TABLE
+ERR_EXIT
+         TFR   U,S           RESTORE CORRECT STACK
+         LDA   #DIRECT
+         TFR   A,DP
+         JMP   SWI_EXIT      EXIT FROM SWI
+NOTFOUND
+         LDA   #INVSWI         INVALID SWI CALL
+         STA   UA,U
+ERROR_SET
+         LDA   UCC,U
+         ORA   #$01
+.                            EFhinzvC  SET CARRY BIT
+         STA   UCC,U
+         BRA   ERR_EXIT
+
+
+VECTOR_TBL_BEGIN
+         FDB   GET_KBD_STATUS                    0
+         FDB   GET_ONE_CHAR                      1
+         FDB   LINE_EDIT                         2 WAS GET ONE LINE
+         FDB   BEEP                              3
+         FDB   PAUSE                             4
+         FDB   CHAR_OUT                          5
+         FDB   WRITE_CHAR_TO_SPECIFIED_POS       6
+         FDB   INCHAR_STRING                     7
+         FDB   COPY_SCN_TO_STRING                8
+         FDB   ABS_CURSOR                        9
+         FDB   RELATIVE_CURSOR                   10
+         FDB   READ_CURSOR_POS                   11
+         FDB   READ_CURSOR_CHAR                  12
+         FDB   SET_SCREEN_SPLIT_POINT            13
+         FDB   CLEAR_TELETEXT_SCREENS            14
+         FDB   SET_DISPLAY_MODE                  15
+         FDB   READ_DISPLAY_MODE                 16
+         FDB   SET_CLOCK_ATTRIBUTES              17
+         FDB   RETURN_TIME                       18
+         FDB   WAIT                              19
+         FDB   SET_PAUSE_FLAG                    20 WAS SET TIMER
+         FDB   NOTFOUND                          21 WAS READ TIMER
+         FDB   NOTFOUND                          22 WAS SET USER PORT
+         FDB   RS232IN                           23 WAS READ USER PORT
+         FDB   RS232OUT                          24 WAS CASSETTE
+         FDB   TERMINAL_MODE                     25  "     "
+         FDB   SELECT_STANDARD_MAP2              26  "     "
+         FDB   SELECT_MEMORY_MAP_ONE             27
+         FDB   SELECT_MEMORY_MAP_TWO             28
+         FDB   WRITE_TO_MEMORY_MAP_TWO           29
+         FDB   SELECT_TTXT1_OR_TTXT2             30
+         FDB   SELECT_SINGLE_HEIGHT              31
+         FDB   SELECT_DOUBLE_HEIGHT              32
+         FDB   SELECT_TOP_PAGE                   33
+         FDB   SELECT_BOTTOM_PAGE                34
+         FDB   SET_AUTO_WRAP                     35
+         FDB   NOTFOUND                          36 WAS RC_DECODER
+         FDB   TEST_EXIT_FLAG                    37
+         FDB   NOTFOUND                          38
+         FDB   NOTFOUND                          39 WAS BIT MASK
+         FDB   NOTFOUND                          40 WAS LOAD FILE
+         FDB   FMSCALL                           41 WAS LOAD & RUN FILE
+         FDB   SET_BREAKPOINT_FLAG               42
+         FDB   SEND_MSG_TO_MASTER                 43
+         FDB   RECV_MSG_FROM_MASTER               44
+         FDB   LOGOFF_ENTRY                      45 LOGOFF CALL
+         FDB   READ_IO                           46 RS232 READ
+         FDB   WRITE_IO                          47 RS232 WRITE
+VECTOR_TBL_END
+
+*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+GET_KBD_STATUS
+                             .FN 0
+         LDA   KEYBD
+         ANDA  #$80         ISOLATE STROBE BIT
+         ORA   BUFSTAT      GET KEYBOARD STATUS
+         STA   UB,U         RETURN IN USER'S A REGISTER
+RETSUB   RTS
+
+*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+GET_ONE_CHAR
+                             .FN 1
+         INC   CHRINFLG     WE ARE IN CHRIN MODE
+PSE_ENT  BSR   CHRIN2       GET CHARACTER
+         STA   UB,U         RETURN IN USER'S B REGISTER
+         RTS
+ 
+CHRIN    INC   CHRINFLG      IN CHRIN MODE
+CHRIN2   PSHS  Y,X,B,CC      SAVE SPARE REGS INCLUDING INTERRUPT STATUS
+.CURSOR ON
+         JSR   CURRCUR       GET ABSOLUTE CURRENT CURSOR POSITION IN X
+         LDB   ,X            READ CHAR
+         PSHS  B             SAVE ORIGINAL FOR LATER
+         TST   CHRINFLG      CHRIN OR PAUSE ?
+         BEQ   CHIN1         MUST BE PAUSE DO NOT TURN ON CURSOR
+         EORB  #$80          REVERSE VIDEO IT
+         STB   ,X            PUT TO SCREEN THUS TURNING "CURSOR" ON
+
+CHIN1    TST   KEYBD         KEY DOWN? (N.B. WILL RESET PIA INT. FLAG)
+         BPL   CHIN2         NO - WAIT
+         TST   BUFSTAT       YES - NEW CHAR WAITING?
+         BNE   CHIN4         YES - GO & GET IT
+         LDD   AUTOREPT      NO- CONTINUE AUTOREPEAT
+         SUBD  #1            DECR AUTO REPEAT COUNT
+         STD   AUTOREPT      
+         BNE   CHIN1         LOOP UNTIL ZERO  -  35uSEC AROUND LOOP
+         LDD   #KEYREPT      SET AUTOREPEAT TIME
+         BRA   CHIN5         GET CHAR AND RETURN
+
+CHIN2    CLR   BUFSTAT       IGNORE KEYS PRESSED BEFORE CHRIN CALLED
+         CLRA
+         CLI                 ENSURE INTS ARE ON
+CHIN3    TST   BUFSTAT       CHARACTER WAITING ?
+         BNE   CHIN4         YES -- EXIT THE ROUTINE
+         LDY   CHRCOUNT      THIS TEST WILL ONLY HAS EFFECT IF TERMINAL
+.                            MODE IS ON,OTHERWISE CHRCOUNT WILL 
+.                            ALWAYS BE ZERO.
+         BNE   CHIN7
+         BRA   CHIN3
+
+CHIN4    LDD   #KEYDELAY     CHAR AVAIL - SET AUTOREPEAT TO 1SEC
+CHIN5    STD   AUTOREPT
+
+.CURSOR OFF
+         SEI                 DISABLE INTS
+         LDA   BUFCHAR       GET CHAR
+         CLR   BUFSTAT       ACKNOWLEDGE
+CHIN7    PULS  B             GET ORIGINAL CHARACTER
+         STB   ,X            TO TURN "CURSOR" OFF
+         CLR   CHRINFLG      NO LONGER IN CHRIN MODE
+CHIN6    PULS  CC,B,X,Y,PC   RESTORE REGISTERS AND RETURN

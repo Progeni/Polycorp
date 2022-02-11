@@ -1,0 +1,272 @@
+.PLRJ00       18-11-81       NAME CHANGED AND DELETED 80 CHARS MODE
+.STTXT00        5 6 81       RS232 O/P REMOVED
+.TTXT00         3.6.81       ADDED BELL FUNCTION
+.TTXT20        19.5.81       LET VDU PRINT A NULL
+.                            ENABLE VDU TO CLEAR TO END OF LINE
+.TTXT19        4.5.81        ADDED ECHO TO RS232 PORT
+.
+. MARK RILEY 10/12/80
+. AND J.L. STANNERS  16/3/81
+.
+.
+.                     VDU MAINLINE
+.                     === ========
+.
+.
+
+         PROC
+VDU:
+
+         PSHS  A,B,X,Y       .SAVE ALL REGISTERS
+         LDY   CURSVARS      POINT TO CURRENT SCREEN
+VDUBEG   ANDA  #$7F          MASK BIT 7 OF CHAR
+         BEQ   VDUEND1       YES
+         CMPA  #" "
+         BGE   VD22
+VDU11    CMPA  #SO           TURN TELETEXT MODE OFF ?
+         BNE   VD2           BRANCH IF NOT
+         CLR   TTXTF,Y       - ELSE (IF SO) TURN TELETEXT OFF
+         BRA   VDUEND
+
+VD2      CMPA  #SI           TURN TELETEXT MODE ON IF A SHIFT OUT
+         BNE   VD4           BRANCH IF NOT SO
+         STA   TTXTF,Y
+         BRA   VDUEND
+
+VD4      CMPA  #NML          NORMAL VIDEO ?
+         BNE   VD5           BRANCH IF NOT SO
+         CLR   INVF,Y        SET NORMAL VIDEO
+         BRA   VDUEND
+
+VD5      CMPA  #RVD          IS IT REVERSE VIDEO ?
+         BNE   VD22          BRANCH IF NOT SO
+         STA   INVF,Y        SET REVERSE VIDEO
+         BRA   VDUEND
+
+VD22     TST   TTXTF,Y       TELETEXT MODE ?
+         BNE   VD3           YES: PRINT CHAR AS IS
+         CMPA  #$1F          IS IT A CONTROL CHARACTER?
+         BHI   VD3           BRANCH IF NOT
+         BSR   CONTROL       OBEY IT !
+         BRA   VDUEND
+
+VD3      LDA   ,S            RETRIEVE COPY OF CHAR IN A FROM STACK (LAST ON STACK)
+         BSR   PRINTIT       PRINT THE CHAR- INCLUDING REV VID IF >= $A0
+
+VDUEND   JSR   REPAIR        FIX UP CURSOR & SCROLL UP OR DOWN IF NECESSARY
+         JSR   SCROLL        SCROLL IF NECESSARY
+VDUEND1  PULS  A,B,X,Y,PC    REPAIR REGISTERS AND RETURN
+
+
+.*********************************************************************
+.
+. TABLE LOOKUP FOR CONTROL MODE
+.
+CONTROL  LEAX  JMPTBL,PCR
+SEARCH   TST   ,X            END OF TABLE?
+         BEQ   ECEND         BRANCH IF NOT FOUND IN TABLE - ELSE DO NOTHING
+         CMPA  ,X+           COMPARE CHAR WITH TABLE ENTRY
+         BEQ   FOUND         BRANCH IF FOUND
+         LEAX  2,X           ADD TWO MORE TO X
+         BRA   SEARCH        TRY AGAIN
+
+FOUND    JMP   [,X]          JUMP TO ROUTINE POINTED AT IN TABLE
+
+JMPTBL   FCB   CR
+         FDB   CARRET
+         FCB   LF
+         FDB   LINEFEED
+         FCB   BS
+         FDB   BKSPACE
+         FCB   HT
+         FDB   TAB
+         FCB   FF
+         FDB   CLRSCN
+         FCB   VT
+         FDB   UPALINE
+         FCB   LCLR          CLEAR TO END OF LINE
+         FDB   LCLEAR
+         FCB   BEL
+         FDB   BELL
+         FCB   $00           END OF THE TABLE
+
+CARRET   CLR   HORZ,Y        SET HORIZONTAL CURSOR TO START OF LINE
+ECEND    RTS                 FINISHED
+
+LINEFEED INC   VERT,Y        MOVE CURSOR DN 1 LINE
+         RTS
+
+UPALINE  DEC   VERT,Y        MOVE CURSOR UP ONE
+         RTS
+
+BKSPACE  DEC   HORZ,Y        BACK CURSOR UP ONE
+         RTS
+
+TAB      INC   HORZ,Y        STEP CURSOR FORWARD ONE CHAR (NON-DESTRUCTIVE)
+         RTS
+
+CLRSCN:  CLRD                THE BLANKING CHAR
+
+CL1      LDX   BEGINS,Y     START OF UNPROTECTED SCREEN AREA
+CL2      STD   ,X++          STORE BLANKING CHAR
+         CMPX  ENDS,Y       DONE ?
+         BLS   CL2           NO
+.                            NOW HOME THE CURSOR
+
+HOME:    LDA   TOP,Y         TOP LINE
+         STA   VERT,Y
+         CLR   HORZ,Y        LEFT HAND SIDE
+         RTS
+
+
+LCLEAR   BSR   REALCUR       GET CURSOR POSITION
+         LDB   #40
+         SUBB  HORZ,Y        SUBTRACT TO GET BYTES COUNT
+         CLRA
+LC1      STA   0,X+
+         DECB                DECREMENT COUNT
+         BNE   LC1
+         RTS
+
+BELL     LDD   UD,U
+         LDX   UX,U
+         PSHS  D,X,Y
+         LDX   #30
+         LDD   #959
+         STX   UX,U
+         STD   UD,U
+         JSR   BEEP
+         PULS  D,X,Y
+         STD   UD,U
+         STX   UX,U
+         RTS
+
+. PROCEDURE TO OUTPUT A CHARACTER TO THE TELETEXT VIDEO RAM
+.
+.
+PRINTIT: JSR   CHAROUT       Jump to Line edit char out routine
+         INC   HORZ,Y        INCR. THE CURSOR
+         RTS
+
+
+
+. CURRCUR
+.
+.  RETURNS IN D AND X THE ABSOLUTE MEMORY POSITION OF THE CURSOR ON THE CURRENT SCREEN
+.   DESTROYS THE Y REGISTER TOO .. ( Y=CURSVARS )
+
+.
+. REALCUR
+.
+. PROCEDURE TO WORK OUT THE REAL MEMORY POSITION OF THE CURSOR
+. AND LEAVES THE RESULT IN THE X REGISTER AND D REGISTERS
+
+.
+. REALPOS
+.
+. RETURNS THE REAL MEM POSITION OF THE VALUE FROM THE D REGISTER
+. AND LEAVES THE RESULT IN THE X AND D REGISTERS
+
+.
+CURRCUR: LDY   CURSVARS      POINT AT CURRENT SCREEN VARIABLES
+REALCUR: LDD  CURSOR,Y       GET CURSOR (V,H)
+ABSPOS:
+REALPOS: PSHS  B             SAVE HORZ - VERT IS IN A
+         LDB   #40           L
+         MUL                 L*VERT
+         ADDB  ,S+           ADD HORIZ COMPONENT & REPAIR STACK
+         ADCA  #0            ALLOW FOR CARRY ... NOW D=V*L+H
+
+RE2      ADDD  BEGBASE,Y     ADD BEGINNING OF SCREEN ADDRESS
+RE3      TFR   D,X           PUT IN X
+         RTS                 DONE......
+***********************************************************************
+
+.NAME:          SCROLL
+.FUNCTION:      Scrolls unprotected screen if necessary or wraps cursor top-bottom
+.ON ENTRY:      Y points to current screen variables
+.ON EXIT:       Cursor may be moved, screen scrolled
+.CALLS:         MDWN,MUP
+.DESTROYS:      CC
+.DESCRIPTION:   Scrolls or wraps cursor to get it back onto the protected area
+.               of screen only if cursor has been moved off protected area by printing a
+.               character
+SCROLL:  PSHS  X,D           SAVE REGS
+         LDA   VERT,Y
+         CMPA  TOP,Y         Is cursor above the top?
+         BGE   SCR2          No - try bottom limit.
+         TST   WRAPFLG       Is WRAP AROUND MODE ENABLED?
+         BNE   CURBOT        YES - WRAP CURSOR TO BOTTOM
+         BSR   SDOWN         Scroll screen down.
+CURTOP   LDA   TOP,Y         Position cursor to top row.
+         BRA   CURSTO
+SCR2     CMPA  BOTTOM,Y      Is cursor below bottom?
+         BLE   SCREND        No - it is OK.
+         TST   WRAPFLG       IS WRAP MODE ENABLED ?
+         BNE   CURTOP        YES - WRAP CURSOR TO TOP
+         BSR   SUP           Scroll screen up.
+CURBOT   LDA   BOTTOM,Y      Position cursor to bottom row.
+CURSTO   STA   VERT,Y        Store New Vertical Cursor Position.
+SCREND   PULS  D,X,PC
+***************************************************************************
+
+. NAME    :    REPAIR
+. FUNCTION:    Repair Horizontal Cursor position after a character has been printed
+. ON ENTRY:    Y points to current screen variables.
+. ON EXIT :    HORZ,Y, VERT,Y may be changed.  Carry is set if cursor has
+.              moved off protected screen.
+. CALLS   :    Nothing
+. DESTROYS:    A,CC
+. DESCRIPTION: If cursor is off the end of a line, it is put onto previous
+.              next time, with no regard to whether the new vertical
+.              position is on the screen or not.
+REPAIR:  LDA   HORZ,Y        Before start of line?
+         BPL   REP2          No - skip.
+         ADDA  #40           Yes - move to next line up.
+         STA   HORZ,Y
+         DEC   VERT,Y
+         RTS
+REP2     SUBA  #40           Past end of line?
+         BLT   OK            No - skip.
+         STA   HORZ,Y        Yes - move to next line down.
+         INC   VERT,Y
+OK       RTS
+
+
+.SCROLL DOWN
+SDOWN:   LDX   ENDS,Y         GET END OF SCREEN (START AT END FOR DOWN !)
+         LEAX  -39,X         POINT TO BEGINNING OF LAST LINE
+SDN2     CMPX  BEGINS,Y
+         BLS   SDN2A
+         LDD   ,--X          GET LAST 2 BYTES OF 2ND LAST LINE
+         STD   40,X          STORE IN LAST LINE
+         BRA   SDN2          NO  :  DO IT AGAIN
+SDN2A    LEAX  40,X          NOW FILL TOP LINE WITH BLANKS
+         CLRD
+SDN3     STD   ,--X
+         CMPX  BEGINS,Y
+         BHI   SDN3          KEEP GOING
+         RTS                 DONE
+
+
+.SCROLL UP
+
+SUP:     LDX   ENDS,Y
+         LEAX  -40,X         GETEND OF PENULTIMATE LINE
+         PSHS  X             PUT STOP ADDR ON STACK
+         LDX   BEGINS,Y       START AT TOP OF SCREEN
+         CMPX  0,S
+         BHS   SUP2A
+SUP2B    LDD   40,X          GET FIRST 2 BYTES
+         STD   ,X++          STORE AND INCREMENT
+         LDD   40,X          TIME OPTIMISING CODE
+         STD   ,X++           "       "       "
+         CMPX  0,S
+         BLO   SUP2B
+SUP2A    LEAS  2,S           REPAIR STACK (STOP ADDRESS)
+         CLRD                NOW FILL BOTTOM LINE WITH NULLS
+SUP3     STD   ,X++
+         CMPX  ENDS,Y         UNTIL DONE
+         BLS   SUP3
+         RTS                 DONE
+         END                 END OF VDU
