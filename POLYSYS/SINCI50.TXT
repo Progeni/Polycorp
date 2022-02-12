@@ -1,0 +1,142 @@
+
+.LINK FCB ON TO "OPEN" CHAIN
+
+FIND_POINTER
+         BSR   FINDP         FIND NEXT FCB POINTER IN CHAIN
+.         BNE   ADD_POINTER    BRANCH IF FILE NOT IN USE
+.         LDB   #$02          THE REQUESTED FILE IS IN USE
+.         SEC                 SET C
+.         RTS                  .EXIT
+
+ADD_POINTER
+         STD   ,X          UPDATE PTRS TO ADD NEW FCB TO END OF CHAIN
+         LDX   ,X
+         CLR   ,X
+         CLR   ERORSTAT,X    CLEAR ERROR STATUS BIT
+         RTS                 .EXIT FIND_POINTER
+
+.REMOVE FCB FROM "OPEN" CHAIN
+
+DELETE_POINTER
+         BSR   FINDP         FIND NEXT POINTER
+         BEQ   POINTER_FOUND          BRANCH IF FILE IN USE
+         LDB   #$0D          ILLEGAL FCB SPECIFIED
+         SEC                 SET C
+         RTS                 .EXIT DELETE_POINTER
+
+POINTER_FOUND
+         LDD   [,X]         .REMOVE THIS FCB FROM CHAIN OF OPEN FCB'S
+         STD   ,X
+ZZZZA    CLC                 CLEAR C
+         RTS                 .EXIT POINTER_FOUND
+
+.FIND FCB POINTER WITHIN CURRENT FCB POINTER CHAIN
+FINDP    LDD   FCBCADR         LOAD CURRENT FCB ADDRESS
+         ADDD  #$1C          INCREMENT ADDRESS TO POINT TO FCB LIST POINTER
+         LDX   #FCBBP        LOAD X WITH ADDRESS OF "FCBBP"
+CHECKXY  LDY   ,X            LOAD Y WITH ADDRESS POINTED TO BY X
+         BNE   CHECKP        TERMINATE ON A NULL POINTER
+         ANDCC #$FB          SET NON-ZERO CONDITION CODE
+         RTS                  .EXIT
+
+CHECKP   CMPD  ,X            SEE IF X POINTS TO FCB LIST POINTER
+         BNE   NEXTP         BRANCH IF IT DOESN'T
+         RTS                 .EXIT IF IT DOES
+
+NEXTP    LDX   ,X            GET NEXT POINTER
+         BRA   CHECKXY
+
+.FN 17:  GET RANDOM BYTE
+
+GRSECT   LDX   FCBCADR       POINT TO CURRENT FCB
+         LDB   ACTSTAT,X
+         LSRB
+         BCC   ERR18         ACT = WRITE
+         LDB   RNDINDEX,X
+         JMP   LD600         TO GET BYTE
+
+.WRITE BYTE TO CURRENT FCB AND SETS CARRY IF FCB BUFFER IS NOW FULL
+
+FILL_FCB LDX   FCBCADR       POINT TO CURRENT FCB
+         LDB   DATINDEX,X
+         INC   DATINDEX,X
+         ABX
+         STA   $40,X
+         INCB
+         BNE   LD5AC
+         ORCC  #$01
+         RTS
+
+.FN 18:  PUT RANDOM BYTE
+
+PRSECT   LDX   FCBCADR
+         LDB   ACTSTAT,X
+         ANDB  #$03
+         CMPB  #$03          = UPDATE?
+         BNE   ERR18         NO
+         ORB   #$80
+         STB   ACTSTAT,X     SET "ALTERED" FLAG
+         LDB   FILEATTR,X
+         BITB  #$80          WRITE PROT?
+         BNE   ERR11         YES
+         LDB   RNDINDEX,X
+         ABX
+         STA   $40,X         STORE BYTE
+LD5AC    CLC
+         RTS                  .EXIT
+
+ERR11    LDB   #$0B          THE FILE OR DISK IS WRITE PROTECTED
+         SEC
+         RTS                  .EXIT
+
+.FMS CALL:  READ NEXT BYTE
+
+READ_BYTE
+LD5B4    LDA   $3B,X
+         BMI   FCB_READ_BYTE
+         BEQ   LD5C2
+         DEC   $3B,X
+         LDA   #$20
+         BRA   LD5DF
+
+LD5C2    BSR   FCB_READ_BYTE
+         BCS   LD5E1
+         CMPA  #$18
+         BHI   LD5DF
+         BEQ   LD5C2
+         CMPA  #$09
+         BNE   LD5DC
+         BSR   FCB_READ_BYTE
+         BCS   LD5E1
+         LDX   FCBCADR
+         STA   $3B,X
+         BRA   LD5B4
+
+LD5DC    TSTA
+         BEQ   LD5C2
+LD5DF    ANDCC #$FE
+LD5E1    RTS                  .EXIT
+
+ERR18    LDB   #$12          SYSTEM FILE STATUS ERROR
+         SEC
+         RTS
+
+FCB_READ_BYTE
+         LDX   FCBCADR       POINT TO CURRENT FCB
+         LDB   DATINDEX,X    LOAD DATA INDEX
+         BEQ   READ_NEXT_SECTOR READ NEXT SECTOR IF DATA INDEX=0
+         INC   DATINDEX,X    INCREMENT DATA INDEX
+LD600    ABX                .INDEX INTO FCB
+         LDA   SECBUF,X      GET NEXT BYTE FROM FCB
+         CLC
+         RTS                  .EXIT
+
+READ_NEXT_SECTOR
+         PSHS   A
+         LDA   #24           FN 24 READ_NEXT_SECTOR IN POPSMXX
+         STA   FNCODE,X
+         PULS  A
+         LBSR  FMS68
+         BCC   FCB_READ_BYTE
+         RTS
+

@@ -1,0 +1,265 @@
+.***********************************************
+.***********************************************
+.SECTION 2 STARTS       DOS STARTS
+.*********************************
+.       CC00-D3FF         DISK OPERATING SYSTEM
+.       D400-DDFF         FILE MANAGEMENT SYSTEM
+.       DE00-DFFF         DISK DRIVERS
+.*********************************
+
+START
+COLDS    JMP   SCOLDS
+
+WARMS    JMP   SWARMS
+
+RENTER   JMP   SRENTER
+
+INCH     JMP   SINCHA
+
+INCH2    JMP   SINCHA
+
+OUTCH    JMP   SOUTCHA
+
+OUTCH2   JMP   SOUTCHA
+
+GETCHR   JMP   SGETCHR
+
+PUTCHR   JMP   SPUTCHR
+
+INBUFF   JMP   SINBUFF
+
+PSTRNG   JMP   SPSTRNG
+
+CLASS    JMP   SCLASS
+
+PCRLF    JMP   SPCRLF
+
+NXTCH    JMP   SNXTCH
+
+RSTRIO   JMP   SRSTRIO
+
+GETFIL   JMP   SGETFIL
+
+LOAD     JMP   SLOAD
+
+SETEXT   JMP   SSETEXT
+
+ADDBX    JMP   SADDBX
+
+OUTDEC   JMP   SOUTDEC
+
+OUTHEX   JMP   SOUTHEX
+
+RPTERR   JMP   SRPTERR
+
+GETHEX   JMP   SGETHEX
+
+OUTADR   JMP   SOUTADR
+
+INDEC    JMP   SINDEC
+
+DOCMND   JMP   SDOCMND
+
+STAT     JMP   SSTATA
+
+RSVD1    JMP   RTS
+
+RSVD2    JMP   RTS
+
+DOSINIT  JMP   INITSS
+
+PFNAME   JMP   PRNTNAME
+
+INITSS
+         CLR   LSTTRM
+         JSR   FMSINIT
+         CLR   CMFLG
+         JMP   LD3FD
+SCOLDS
+         JSR   RUN_STARTUP_FILE
+         LDA   #$8C
+         STA   SCOLDS        DISABLE RUN STARTUP FILE
+COLD2    CLR   LSTTRM
+         JSR   FMSINIT
+         CLR   CMFLG
+         JSR   LD3FD         INITIALISE I/O ADDRESSES AND GET DATE
+
+
+SWARMS    LDS   #LINBUF      INITIALISE SYSTEM STACK
+         LDX   #SCRD
+         STX   SCRC+1
+         CLR   CPUTYP+1
+         CLR   LCC4C
+         BSR   SRSTRIO       INITIALISE I/O POINTERS
+         LDA   LSTTRM
+         CMPA  DOSEOL        MORE COMMAND BUFFER TO PROCESS?
+         BNE   NEWCOMD       NO
+         INC   BUFPNT+1      YES  -  POINT TO IT
+         BRA   SRENTER
+
+NEWCOMD  TST   CMFLG         USER PROGRAM CALL TO FLEX?
+         LBNE  USERCALL         YES
+         SWI  
+         FCB   STANMAP2      SELECT STANDARD MAP 2
+         LDD   #BRK_SVCE      ENABLE EXIT  KEY
+         STD   $DFCC
+         LDD   #TOPRAM
+         STD   MEMEND
+         LDD   #SWARMS
+         STD   ESCRTN
+         JSR   FMSCLS        CLOSE ANY EXISTING FILES
+         LDX   #PROMPT       OUTPUT DOS PROMPT
+         JSR   SPSTRNG
+         INC   REPTFLG
+         BSR   SINBUFF       READ LINE FROM INPUT MEDIUM
+SRENTER    JSR   LD0D4       REMOVE LEADING SPACES
+         CMPA  #" "
+         BLO   NEWCOMD       RE-PROMPT ON CONTROL CHAR AS FIRST
+                            .NON SPACE CHARACTER
+LCDB8    LDX   BUFPNT
+         STX   FLADDR
+         LDX   #SYSFCB
+         JSR   SGETFIL
+         BCS   LCDD9
+         LDX   #GETMON
+         BSR   LCE06         CHECK IF GET OR MON
+         BEQ   LCDD3
+         LDX   USRCTB
+         BEQ   LCDD6         BRANCH IF NO USER DEFINED COMMANDS
+         BSR   LCE06
+         BNE   LCDD6         BRANCH IF NOT USER DEFINED FUNCTION
+LCDD3    JMP   [$01,X]
+
+LCDD6    JSR   OPCMDFIL      GO OPEN COMMAND FILE
+LCDD9    LDX   #WHAT         POINT TO "WHAT?" MESSAGE
+         LDA   #$15          ILLEGAL FILE SPECIFICATION
+LCDDE    STA   ERRNO         SAVE ERROR NUMBER
+LCDE1    JSR   SPSTRNG       PRINT MESSAGE
+LCDE4    CLR   LSTTRM        ABORT COMMAND LINE
+         JMP   SWARMS        RETURN POINT AFTER COMMAND LINE
+                            .HAS BEEN PROCESSED
+
+SRSTRIO    LDX   OUTCH2+1
+         STX   OUTCH+1
+         LDX   INCH2+1
+         STX   INCH+1
+         CLR   INFLG
+         CLR   OUTFLG
+         CLR   SPECIO
+         CLR   FIFCB
+         CLR   FOFCB
+RTS    RTS
+
+LCE06    LDY   #SYSFCB+FILENAME
+LCE0A    LDA   ,Y+
+         CMPA  #$5F          LOWER CASE TO UPPER CASE CONVERSION
+         BLS   LCE12
+         SUBA  #$20
+.
+.        IDENTIFY IF BUILT IN COMMAND - 'GET' OR 'MON'
+.
+LCE12    CMPA  ,X+
+         BNE   LCE1E
+         TST   ,X
+         BNE   LCE0A
+         TST   ,Y
+         BEQ   LCE2A
+LCE1E    TST   ,X+
+         BNE   LCE1E
+         LEAX  $02,X
+         TST   ,X
+         BNE   LCE06
+         ANDCC #$FB          SET 'NE' CONDITION
+LCE2A    RTS
+
+SINBUFF  PSHS  Y
+         LDB   #$1F          INITIALISE EDIT ROUTINE
+         LDX   #LINBUF       X POINTS TO BUFFER
+         LDY   #128          Y CONTAINS BUFFER LENGTH
+         STX   BUFPNT
+LINLP    SWI
+         FCB   LINE_EDIT     LINE EDIT
+         CMPB  #CR
+         BEQ   INBEND
+LIN1     SWI                 IN CHAR
+         FCB   CHAR_IN
+         CMPB  #$14          REPEAT KEY?
+         BNE   LIN3
+         TST   REPTFLG       TEST REPEAT FLAG
+         BEQ   LIN1          BRANCH IF REPEAT IS DISABLE
+         CLR   REPTFLG
+LIN2     LDB   0,X+
+         ANDB  #$7F
+         CMPB  #CR           IS IT CARRIAGE RETURN
+         BEQ   LIN1
+         SWI
+         FCB   LINE_EDIT
+         BRA   LIN2
+LIN3     CLR   REPTFLG
+         CMPB  #$18           CONVERT DOWN ARROW
+         BLO   LINLP         AND UP ARROW KEYS
+         CMPB  #$19           TO LINE FEED AND
+         BHI   LINLP         CURSOR UP CODES TO ENABLE THESE FNS
+         SUBB  #$0E
+         BRA   LINLP
+INBEND
+         PULS   Y,PC
+
+SPSTRNG    BSR   SPCRLF
+LCE83    LDA   ,X
+         CMPA  #EOT
+         BEQ   LCEF8
+         JSR   SPUTCHR
+         LEAX  $01,X
+         BRA   LCE83
+
+.LCE90    JSR   STAT              .************************
+.         BEQ   LCEFA
+.         JSR   [LD3E5]           .        ESCAPE
+.         CMPA  ESCCHR
+.         BNE   LCEFA             .        RETURN
+.LCE9E    CLR   CURLIN
+.LCEA1    JSR   [LD3E5]           .      PROCESSING
+.         CMPA  ESCCHR
+.         BEQ   LCEFA             .   CODE REMOVED
+.         CMPA  #CR
+.         BNE   LCEA1
+.         CLR   LSTTRM
+.         JMP   [ESCRTN]           .**************************
+.
+SPCRLF    TST   SPECIO
+         BNE   LCEE1
+...***   BSR   LCE90         **** ESCAPE RETURN   *** REMOVED
+         LDA   DOSDP
+         BEQ   LCEE1
+         CMPA  CURLIN
+         BHI   LCEDE
+         CLR   CURLIN
+.        TST   PSEFLG
+.        BEQ   LCED0
+...***         BSR   LCE9E            .******   INTO ESCAPE RETURN
+LCED0    PSHS  B
+         LDB   EJCNT
+         BEQ   LCEDC
+LCED7    BSR   LCEE1
+         DECB
+         BNE   LCED7
+LCEDC    PULS  B
+LCEDE    INC   CURLIN
+LCEE1    SWI
+         FCB   PAUSE         PAUSE IF PAUSE KEY PRESSED !!!!!!
+         PSHS  X             NOW PRINT THE CR LF MESSAGE
+         LDX   #CRLFMS
+         BSR   LCE83         PSTRNG WITHOUT THE PREAMBLE
+         PULS  X             RETREIVE USER's POINTER
+         PSHS  B
+         LDB   DOSNUL
+         BEQ   LCEF6
+LCEF0    CLRA
+         BSR   SPUTCHR
+         DECB
+         BNE   LCEF0
+LCEF6    PULS  B
+LCEF8    CLC                  CLEAR CONDITION CODE
+LCEFA    RTS
+.

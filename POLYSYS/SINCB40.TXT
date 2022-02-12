@@ -1,0 +1,255 @@
+.SINCB40         18-1-82     NEW MESSAGE NO'S AND TIME
+.SINCB30         12.81       FOR NEW (1982) SWI'S
+.SINCB02       22.5.81       SLAVE TO REQUEST DATE/TIME FROM USER
+.                            NAME OF STARTUP FILE CHANGED TO "STARTUPS.TXT"
+.                            IF MASTER DOES NOT HAVE IT ALREADY
+.********************************
+.        0000-9FFF           USER RAM
+.        A000-BFFF           BASIC ROM #1
+.        C000-C07F         STACK AREA
+.        C080-C0FF         INPUT BUFFER
+.        C100-C6FF         UTILITY COMMAND AREA
+.        C700-DFFF           SYSTEM DOS
+.        E000-FFFF           BASIC ROM #2
+.********************************
+         ORG   CONTINUE
+LC607    LDA   #$39          ..CODE FOR RTS
+         STA   LD3FD         .INSERT AT D3FD
+.
+.SEE IF MASTER HAS DATE/TIME
+.
+DATREQ   LDY   #0            STRING LENGTH ZERO
+         LDX   #DATTIM       BUFFER ADDRESS
+         LDB   #04           MESSAGE TYPE 04 (ASK FOR DATE/TIME IF STRING LENGTH =0)
+         SWI
+         FCB   43            SEND MESSAGE TO MASTER
+DATRQ1   LDY   #11           STRING LENGTH TO BE RETURNED
+         SWI
+         FCB   44            GET MESSAGE FROM MASTER
+         CMPB  #04           CORRECT MESSAGE?
+         BNE   DATREQ        NO
+         TST   0,X           ANY DATE IN?
+        LBNE   GOT           YES SO DON'T ASK USER FOR DATE AND TIME
+         BSR   DT_DAT        NO -ASK USER
+         BRA   DATRQ1        GET DATE/TIME AGAIN
+.
+.
+DT_DAT   JSR   PCRLF
+         LDX   #DOSDAT
+         JSR   PSTRNG        ASK FOR DATE
+         JSR   INBUFF        GET IT INTO LINE BUFFER
+         CLR   DOSEOL        TEMPORARILY FOR INDEC
+         LDY   #DATTIM       PUT IN HERE FOR TRANSFER TO MASTER
+         JSR   INDEC         DECIMAL NUMBER?
+         BCS   DT_DAT        NO
+         CMPX  #31           LEGAL DAY?
+         BHI   DT_DAT        NO
+         CMPX  #0
+         BLE   DT_DAT        NO
+         TFR   X,D
+         STB   SYSDAY        STORE IN LOCAL VARIABLE
+         STB   1,Y           AND IN STRING FOR MASTER
+         JSR   INDEC         DECIMAL NUMBER?
+         BCS   DT_DAT        NO
+         CMPX  #12           LEGAL MONTH?
+         BHI   DT_DAT        NO
+         CMPX  #0
+         BLE   DT_DAT        NO
+         TFR   X,D
+         STB   SYSMONTH      STORE IN LOCAL VARIABLE
+         STB   ,Y++           AND IN STRING FOR MASTER
+         JSR   INDEC         DECIMAL NUMBER?
+         BCS   DT_DAT        NO
+         CMPX  #99           LEGAL YEAR?
+         BHI   DT_DAT        NO
+         TFR   X,D
+         STB   SYSYEAR       STORE IN LOCAL VARIABLE
+         STB   ,Y+           AND IN STRING FOR MASTER
+
+.GOT DATE NOW GET TIME
+DT_TIM   JSR   PCRLF
+         LDX   #DOSTIM
+         JSR   PSTRNG        ASK USER FOR TIME
+         JSR   INBUFF        PUT INTO LINE BUFFER
+         JSR   INDEC         DECIMAL NUMBER?
+         BCS   DT_TIM        NO
+         CMPX  #23           LEGAL HOUR?
+         BHI   DT_TIM        NO
+         CLRD                CLEAR THE TIME FIRST
+         STD   TIMELS
+         STA   TIME
+         TFR   X,D           MULTIPLY HOUR BY 3600
+DT_TI2   DECB                B CONTAINS THE HOUR COUNT
+         BMI   DT_TI1
+         LDX   TIMELS        LOAD TIME LEAST SIG 2 BYTES
+         LEAX  3600,X
+         CMPX  TIMELS
+         BHS   DT_TI3
+         INC   TIME          OTHERWISE INCREASE MS BYTE OF TIME REG
+DT_TI3   STX   TIMELS
+         BRA   DT_TI2
+DT_TI1
+         JSR   INDEC         DECIMAL NUMBER?
+         BCS   DT_TIM        NO
+         CMPX  #59           LEGAL MINUTE?
+         BHI   DT_TIM        NO
+         TFR   X,D           TRANSFER MINUTE TO REG D
+         LDA   #60
+         MUL                 MULTIPLY BY 60
+         TFR   D,X
+         BSR   ADDTIM        ADD TO TIME & TIMELS
+         JSR   INDEC         DECIMAL NUMBER?
+         BCS   DT_TIM        NO
+         CMPX  #59           LEGAL SECOND?
+         BHI   DT_TIM        NO
+         TFR   X,D
+         BSR   ADDTIM        ADD TO TIME & TIMELS
+         JSR   PCRLF
+         LDA   #':'
+         STA   DOSEOL        RESET DOSEOL CHARACTER
+.        MULTIPLY THE TIME TO GIVE TIME IN 10 MSEC (MULTIPLY BY 100)
+         LDX   #5
+         LDB   TIME
+         CLRA
+         LDY   TIMELS
+SHIF     BSR   SHIFTL
+         LEAX  -1,X
+         BNE   SHIF
+         PSHS  Y,D
+         BSR   SHIFTL
+         TFR   D,X
+         LDD   2,S           LS OF 64 X TIMELS
+         PSHS  Y
+         LEAY  D,Y
+         CMPY  0,S++
+         BHS   NOCARRY
+         LEAX  1,X
+NOCARRY  TFR   X,D
+         ADDB  1,S
+         LEAS  4,S           RESTORE STACK
+         LDA   #4
+ADD4     PSHS  D
+         LDD   TIMELS
+         PSHS  Y
+         LEAY  D,Y
+         CMPY  0,S++
+         BHS   NOCARY1
+         INC   1,S
+NOCARY1  PULS  D
+         ADDB  TIME
+         DECA
+         BNE   ADD4
+         STB   TIME
+         STY   TIMELS
+.SET OWN CLOCK
+         LDA   TIME          GET MS BYTE OF TIME
+         TFR   D,X           X SHOULD CONTAINS MS BYTE OF TIME
+         LDB   #1
+         LDY   TIMELS
+         SWI                 SET TIME ATTRIBUTES
+         FCB   17
+.
+.DATTIM SET UP SO SEND TO MASTER
+.
+         LDY   #6            NUMBER OF BYTES TO SEND TO MASTER
+         LDX   #DATTIM       STARTING HERE
+         LDB   #04           MESSAGE TYPE 04
+         SWI
+         FCB   43            SEND MESSAGE TO MASTER
+         RTS
+
+ADDTIM   TFR   X,D           ADD TO TIME LS 2 BYTES
+         LDX   TIMELS
+         LEAX  D,X
+         CMPX  TIMELS
+         BHS   ADTEXIT
+         INC   TIME
+ADTEXIT  STX   TIMELS
+         RTS
+
+SHIFTL   PSHS  D
+         TFR   Y,D
+         ASLB
+         ROLA
+         TFR   D,Y
+         PULS  D
+         ROLB
+         CLC
+         RTS
+
+.
+GOT      LDD   ,X++
+         STD   SYSMONTH
+         LDA   ,X+
+         STA   SYSYEAR
+         LDA   TIME
+         CLRB
+         TFR   D,X
+         LDY   TIMELS
+         INCB
+         SWI
+         FCB   17              SET THE CLOCK
+         RTS                 RETURN
+
+DATTIM   FMB   3,0
+TIME     FCB   0
+TIMELS   FDB   00
+DOSDAT   FCB   SI,YELLOW,"Enter date",WHITE,"DD,MM,YY ",SO,EOT
+DOSTIM   FCB   SI,YELLOW,"Enter time",WHITE,"HH,MM ",SO,EOT
+
+
+         ERRIF *<$C700       MUST BE ABOVE $C6FF SO AS NOT TO BE
+                             . STOMPED ON BY UTILITIES
+
+
+. STARTUP FILE PROCESSING  CALLED EACH TIME BY COLDSTART
+
+RUN_STARTUP_FILE
+
+         LDX   #SYSFCB       USE SYS FCB TO GET STARTUP FILE
+         LDA   #1            OPEN FILE
+         STA   ,X
+         JSR   FMSCALL
+         BEQ   LC66E
+         LDA   1,X           GET ERR BYTE
+         CMPA  #4            IF NOT FOUND, OK: ELSE ERROR
+         BEQ   NO_SFILE
+RSF_ERR  LDX   #SUFMES       PRINT ERR MESSAGE
+         JSR   PSTRNG
+NO_SFILE RTS                 BACK TO CALLER
+
+LC66E    LDY   #LINBUF       FILE FOUND- RUN IT !
+         STY   BUFPNT        
+.COPY UP TO 128 BYTES INTO LINE BUFF FROM FILE
+         LDB   #$80
+RSFLP    JSR   FMSCALL       READ A BYTE
+         BNE   RSF_ERR       READ ERROR
+         DECB
+         BEQ   RSF_ERR       NO CR FOUND IN FIRST 128 CHARS OF STARTUP FILE !
+         STA   ,Y+
+         CMPA  #CR
+         BNE   RSFLP         UNTIL CHAR = CR
+         LDA   #4            CLOSE THE FILE
+         STA   ,X
+         JSR   FMSCALL
+         JMP   RENTER        NOW EXECUTE THE STARTUP LINE
+
+
+....................................................................
+
+SUFMES   FCB   SI,GREEN,"**  ERROR  **  CANNOT RUN STARTUP FILE",SO,EOT
+
+....................................................................
+         ORG   $C840
+
+SYSFCB    FCB   $FF,$00,$00,$00    .SYSTEM FCB AREA START
+         FCB   "STARTUPSTXT",NUL
+
+.NOTE THERE IS ROOM FOR 3 FCB's IN HERE : C840, C980, CAC0
+
+
+         ORG   $CC00
+
+.*****************************************
+.             LOADS OF FCB DEFINITIONS
+.*****************************************

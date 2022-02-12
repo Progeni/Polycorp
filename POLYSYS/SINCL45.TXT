@@ -1,0 +1,54 @@
+REPERR   BEQ   ERR4          FILE NOT EXIST
+         SUBA  #2
+         BNE   ERR3          BRANCH IF NOT ERR 2
+         LDX   #FILEUSE      FILE IN USE
+         BRA   GENERR
+ERR3     LDX   #FILEXIST     FILE ALREADY EXIST
+         BRA   GENERR
+ERR4     LDX   #FILENEXS     FILE NOT EXIST
+GENERR   JSR   PSTRNG
+         LDA   #YELLOW
+         BSR   PRNTCHR
+         LDX   0,S           RESTORE X
+         BSR   PRNAME        PRINT FILE NAME
+        LBRA   SRPTERR_END
+
+* PRINT FILE NAME FROM WORK BUFFER
+PRNAME   TST   NAMWKBUF,X
+         BEQ   REPEX
+         LDA   DRIVENO,X
+PRNAM1   BMI   SKIPDRV       SKIP OVER DRIVE NUMBER
+         ANDA  #3
+         ADDA  #$30
+         BSR   PRNTCHR       OUTPUT DRIVE NO
+         LDA   #"."
+         BSR   PRNTCHR       OUTPUT "."
+SKIPDRV  LEAX  NAMWKBUF,X
+         LDB   #8
+         BSR   PRTSPEC
+         LDA   #"."
+         BSR   PRNTCHR
+         LDB   #3
+         BSR   PRTSPEC
+         LDA   #SO
+         BSR   PRNTCHR
+REPEX    RTS
+
+PRNTCHR  JMP   SPUTCHR
+
+                             .PRINT STRING POINTED TO BY X,B
+PRTSPEC  LDA   ,X+           GET CHARACTER
+         BEQ   PRTS2         DON'T OUTPUT NULLS
+         BSR   PRNTCHR
+PRTS2    DECB
+         BNE   PRTSPEC
+         RTS
+ 
+PRNTNAME LDA   0,X           PICK UP DRIVE NO
+         LEAX  -35,X
+         BRA   PRNAM1
+
+CONTE    FCB   "Type any key to continue ",EOT
+
+DEFEXT   FCB "BIN","TXT","CMD","BAS","SYS","BAK"
+         FCB "SCR","DAT","BAC","DIR","PRT","OUT"

@@ -1,0 +1,94 @@
+BYTECNT  FCB   0
+
+SLOAD    CLR   TFRFLG        NO XFER ADDRESS YET
+         BSR   NEXRECRD      READ FIRST SECTOR
+         BRA   STILLDAT      FIRST TIME ONLY
+TWOOR16  DECB                ANY DATA LEFT
+         BNE   STILLDAT      YES
+         BSR   NEXRECRD      
+STILLDAT LDA   ,U+
+         CMPA  #2            IS IT LOAD ADDRESS
+         BEQ   LOADADDR      YES
+         CMPA  #$16          IS IT TRANSFER ADDRESS?
+         BNE   TWOOR16       NO
+         DECB                ANY LEFT?
+         BNE   XFERMS        YES
+         BSR   NEXRECRD
+XFERMS   LDA   ,U+           MS BYTE OF TRANSFER ADDRESS
+         STA   TFRADR        STORE FOR SYSTEM
+         DECB                ANY LEFT?
+         BNE   XFERLS        YES
+         BSR   NEXRECRD
+XFERLS   LDA   ,U+           LS BYTE OF TRANSFER ADDRESS
+         STA   TFRADR+1      STORE FOR SYSTEM
+         LDA   #1
+         STA   TFRFLG        NOW HAVE A TRANSFER ADDRESS
+         BRA   TWOOR16
+
+LOADADDR DECB                ANY LEFT?
+         BNE   LOADMS
+         BSR   NEXRECRD
+LOADMS   LDA   ,U+           MS BYTE OF LOAD ADDRESS
+         STA   ,--S          PUT MS LOAD ADDRESS IN RIGHT PLACE ON STACK
+         DECB                ANY LEFT?
+         BNE   LOADLS
+         BSR   NEXRECRD
+LOADLS   LDA   ,U+           LS BYTE OF LOAD ADDRESS
+         STA   1,S           PUT LS LOAD ADDRESS IN RIGHT PLACE ON STACK
+         PULS  Y             TAKE LOAD ADDRESS OFF STACK INTO 'Y'
+         PSHS  B             SAVE 'B' ON STACK
+         LDD   LDOFFS        LOADER OFFSET
+         LEAY  D,Y           ADD LOADER OFFSET TO 'Y'
+         PULS  B             RESTORE B
+         DECB                ANY LEFT?
+         BNE   BYTECO
+         BSR   NEXRECRD
+BYTECO   LDA   ,U+
+         STA   BYTECNT
+MOREDATA DECB                ANY LEFT?
+         BNE   XFERDATA
+         BSR   NEXRECRD
+XFERDATA LDA   ,U+
+         STA   ,Y+
+         DEC   BYTECNT
+         BNE   MOREDATA
+         BRA   TWOOR16
+
+NEXRECRD LDX   #SYSFCB
+         LDD   $40,X         NEXT TRACK/RECORD
+         BNE   GOREAD
+         BRA   ENDLOAD       FINISHED
+
+
+GOREAD   STD   $1E,X         TRACK/SECTOR TO CURRENT TRACK/SECTOR
+         LDB   #9            FMS READ FUNCTION CODE
+         STB   FNCODE,X
+         JSR   FMSCALL       GO DO IT
+         BNE   RETRY         ERRORS
+
+RESET    LDB   #$FC          RESET NUMBER OF BYTES IN RECORD
+         LEAU  $44,X         SET 'U' TO BEGINNING OF BUFFER
+         RTS                 GOOD READ - CARRY ON
+
+LD1E4    LDX   #SYSFCB       COMES HERE FROM OPCMDFIL!!!!
+         JSR   FMSCALL       OPEN COMMAND FILE
+         BEQ   LD1FD         BRANCH IF NO ERROR
+RETRY    LDA   ERORSTAT,X    GET RETURN STATUS
+         CMPA  #8            END OF FILE?
+         BNE   LD200         NO
+ENDLOAD  LEAS  $2,S          JUMP OVER PREVIOUS RETURN ADDRESS
+         LDA   #4            CLOSE FILE FUNCTION
+         STA   FNCODE,X
+         JSR   FMSCALL       GO CLOSE FILE
+         BNE   LD20A         ERROR CLOSING FILE
+LD1FD    CLC                 NO ERROR
+         RTS                 RETURN
+
+LD200    STA   ERRNO
+         CMPA  #4            'FILE NOT FOUND' ERROR
+         BNE   LD20A
+         SEC
+         RTS
+
+LD20A    JSR   SRPTERR       GO TYPE OUT ERROR
+         JMP   LCDE4

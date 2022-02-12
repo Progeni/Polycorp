@@ -1,0 +1,335 @@
+SGETCHR    TST   INFLG
+         BNE   LCF1A
+         TST   FIFCB
+         BEQ   LCF15
+         BSR   LCF21
+         TST   FIECHO
+         BEQ   LCF1D
+         TST   FOFCB
+         BEQ   LCF1D
+         BSR   LCF66
+         BRA   LCF1D
+
+LCF15    JSR   INCH
+         BRA   LCF1D
+
+LCF1A    JSR   INCH2
+LCF1D    CLR   CURLIN
+         RTS
+
+LCF21    STX   LCC47
+         LDX   FIFCB
+         BRA   LCF2F
+
+LCF29    STX   LCC47
+         LDX   FOFCB
+LCF2F    JSR   FMSCALL
+         BNE   LCF38
+         LDX   LCC47
+         RTS
+
+LCF38    CLR   FOFCB
+         JSR   SRPTERR
+         JMP   WARMS
+
+SPUTCHR    TST   SPECIO
+         BNE   LCF66
+         CMPA  #$1F
+         BHI   LCF4F
+         CLR   CURCOL
+         BRA   LCF66
+
+LCF4F    INC   CURCOL
+         PSHS  A
+         LDA   DOSWD
+         BEQ   LCF64
+         CMPA  CURCOL
+         BCC   LCF64
+         JSR   SPCRLF
+         INC   CURCOL
+LCF64    PULS  A
+LCF66    PSHS  A
+         TST   OUTFLG
+         BNE   LCF80
+         TST   FOFCB
+         BEQ   LCF76
+         BSR   LCF29
+         BRA   LCF83
+
+LCF76    TST   FIFCB
+         BNE   LCF83
+         JSR   OUTCH
+         BRA   LCF83
+
+LCF80    JSR   OUTCH2
+LCF83    PULS  A
+         RTS
+
+SOUTDEC    CLR   LCC4A
+         STB   TFRFLG
+         LDA   #EOT
+         STA   LCC4D
+         LDD   ,X
+         LDX   #LCCA0
+LCF96    BSR   LCFA3
+         LEAX  $02,X
+         DEC   LCC4D
+         BNE   LCF96
+         TFR   B,A
+         BRA   LCFE0
+
+LCFA3    CLR   MAXFN
+LCFA6    CMPD  ,X
+         BCS   LCFB2
+         SUBD  ,X
+         INC   MAXFN
+         BRA   LCFA6
+
+LCFB2    PSHS  A
+         LDA   MAXFN
+         BNE   LCFC9
+         TST   LCC4A
+         BNE   LCFC9
+         TST   TFRFLG
+         BEQ   LCFCE
+         LDA   #$20
+         BSR   LCFEA
+         BRA   LCFCE
+
+LCFC9    INC   LCC4A
+         BSR   LCFE0
+LCFCE    PULS  PC,A
+
+SOUTADR    BSR   SOUTHEX
+         LEAX  $01,X
+SOUTHEX    LDA   ,X
+         BSR   LCFDC
+         LDA   ,X
+         BRA   LCFE0
+
+LCFDC    LSRA
+         LSRA
+         LSRA
+         LSRA
+LCFE0    ANDA  #$0F
+         ADDA  #$30
+         CMPA  #$39
+         BLS   LCFEA
+         ADDA  #$07
+LCFEA    JMP   SPUTCHR
+
+SCLASS    CMPA  #"0"
+         BCS   INVCHAR
+         CMPA  #"9"
+         BLS   VALCHAR
+         CMPA  #"A"
+         BCS   INVCHAR
+         CMPA  #"Z"
+         BLS   VALCHAR
+         CMPA  #"a"
+         BCS   INVCHAR
+         CMPA  #"z"
+         BLS   VALCHAR
+INVCHAR  SEC                  SET CONDITION CODE
+         STA   LSTTRM
+         RTS
+
+VALCHAR  CLC                  CLEAR CONDITION CODE
+         RTS
+
+SNXTCH    PSHS  X
+         LDX   BUFPNT
+         LDA   CURCHR
+         STA   PRVCHR
+LD019    LDA   ,X+
+         STA   CURCHR
+         CMPA  #CR
+         BEQ   VALDTERM
+         CMPA  DOSEOL
+         BEQ   VALDTERM
+         STX   BUFPNT
+         CMPA  #" "
+         BNE   VALDTERM
+         CMPA  ,X
+         BEQ   LD019         CONTINUE TILL 'NE' CONDITION SET
+VALDTERM BSR   SCLASS
+         PULS  PC,X
+
+SGETFIL   LDA   #$15         AN ILLEGAL DRIVE NO. SPECIFIED
+         STA   ERORSTAT,X
+         LDA   #$FF
+         STA   DRIVENO,X
+         CLR   FILENAME,X
+         CLR   FILEEXT,X
+         JSR   LD0D4         POINT TO NEXT CHARACTER IN INPUT LINE
+         LDA   #$08
+         STA   MAXFN
+         BSR   LD080
+         BCS   LD07C
+         BNE   NOTFSTOP      BRANCH IF NOT FULL STOP
+.
+.        DRIVE SPECIFIED  -  DEFAULT IS TO BE OVERRIDDEN
+.
+         BSR   LD080
+         BCS   LD07C
+         BNE   NOTFSTOP      BRANCH IF NOT FULL STOP
+         CMPX  CMDINBUF      ENSURE FILENAME NOT NULL
+         BEQ   SETERR
+         BSR   LD080
+         BLS   SETERR
+NOTFSTOP LDX   CMDINBUF
+         TST   FILENAME,X
+         BEQ   SETERR
+         TST   DRIVENO,X
+         BPL   LD07C
+
+LD074    LDA   WASN
+LD077    STA   DRIVENO,X
+LD07C    LDX   CMDINBUF      RESET X TO CURRENT CHARACTER POINTER
+         RTS
+
+LD080    BSR   SNXTCH
+         BCS   SETERR
+         CMPA  #"9"          CHECK IS COMMAND PRECEDED BY DRIVE NO.
+         BHI   ALPHACHR
+         LDX   CMDINBUF
+         TST   DRIVENO,X
+         BPL   SETERR
+         ANDA  #$03          CONVERT ASCII DRIVE NO. TO BINARY
+         STA   DRIVENO,X
+         BSR   SNXTCH
+         BCC   SETERR        BRANCH IF CHARACTER ALPHANUMERIC
+LD098    CMPA  #"."
+         CLC                  CLEAR CONDITION CODE
+         RTS
+
+ALPHACHR LDB   MAXFN         LOAD B WITH MAXIMUM FILENAME LENGTH
+         BMI   SETERR
+         PSHS  B
+         SUBB  #$05
+         STB   MAXFN
+         PULS  B
+LD0AB    CMPA  LCC49
+         BLO   LD0B2
+         SUBA  #$20          CONVERT LOWER CASE TO UPPER CASE
+LD0B2    STA   FILENAME,X    COPY FILENAME TO NAME WORK BUFFER
+         LEAX  $01,X
+         DECB
+         JSR   SNXTCH
+         BCC   LD0C4
+.
+.        CHECK FOR 2 OTHER VALID CHARACTERS IN FILENAME
+.
+         CMPA  #"-"
+         BEQ   LD0C4
+         CMPA  #"_"
+         BNE   LD0CA
+LD0C4    TSTB
+         BNE   LD0AB
+SETERR   SEC                  SET CONDITION CODE
+         RTS
+
+LD0CA    TSTB
+         BEQ   LD098
+         CLR   FILENAME,X    CLEARING REST OF FILENAME BUFFER
+         LEAX  $01,X
+         DECB
+         BRA   LD0CA
+
+LD0D4    STX   CMDINBUF      STORE ADDRESS OF LAST CHARACTER
+                            .IN INPUT BUFFER +1
+         LDX   BUFPNT
+LD0DA    LDA   ,X
+         CMPA  #" "          IGNORE LEADING SPACES
+         BNE   LD0E4
+         LEAX  $01,X
+         BRA   LD0DA
+
+LD0E4    STX   BUFPNT
+         LDX   CMDINBUF
+         RTS
+
+SSETEXT    PSHS  Y,X
+         LDB   FILEEXT,X
+         BNE   LD109
+         LDY   #DEFEXT
+         CMPA  #$0B
+         BHI   LD109
+         LDB   #$03
+         MUL
+         LEAY  B,Y
+         LDB   #$03
+LD100    LDA   ,Y+
+         STA   $0C,X
+         LEAX  $01,X
+         DECB
+         BNE   LD100
+LD109    PULS  PC,Y,X
+
+SGETHEX    JSR   LOFFZERO
+LD132    JSR   SNXTCH
+         BCS   LD159
+         BSR   LD15F
+         BCS   LD153
+         PSHS  B
+         LDB   #EOT
+LD13F    ASL   LDOFFS+1
+         ROL   LDOFFS
+         DECB
+         BNE   LD13F
+         PULS  B
+         ADDA  LDOFFS+1
+         STA   LDOFFS+1
+         INCB
+         BRA   LD132
+
+LD153    JSR   SNXTCH
+         BCC   LD153
+         RTS
+
+LD159    LDX   LDOFFS
+         CLC                  CLEAR CONDITION CODE
+         RTS
+
+LD15F    SUBA  #$47
+         BPL   LD172
+         ADDA  #$06
+         BPL   LD16B
+         ADDA  #$07
+         BPL   LD172
+LD16B    ADDA  #LF
+         BMI   LD172
+         CLC                  CLEAR CONDITION CODE
+         RTS
+
+LD172    SEC                  SET CONDITION CODE
+         RTS
+
+SINDEC    BSR   LOFFZERO
+LD178    JSR   SNXTCH
+         BCS   LD159
+         CMPA  #$39
+         BHI   LD153
+         ANDA  #$0F
+         PSHS  B
+         PSHS  A
+         LDD   LDOFFS
+         ASLB
+         ROLA
+         ASLB
+         ROLA
+         ASLB
+         ROLA
+         ADDD  LDOFFS
+         ADDD  LDOFFS
+         ADDB  ,S+
+         ADCA  #$
+         STD   LDOFFS
+         PULS  B
+         INCB
+         BRA   LD178
+
+
+.***************************************
+.      LOADER ROUTINE
+.***************************************

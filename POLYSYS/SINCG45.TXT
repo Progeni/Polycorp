@@ -1,0 +1,362 @@
+
+GETCALL  CLRA
+         BSR   CONSTRUCT_NAME
+         BCS   LD224
+         BSR   LOFFZERO
+         INC   LCC4C
+         LBSR  SLOAD
+         BRA   GETCALL
+
+.ROUTINE TO SET BINARY FILE LOADER OFFSET TO ZERO
+
+LOFFZERO CLRA
+         CLRB
+         STD   LDOFFS
+         RTS
+
+LD224    LDB   LCC4C
+         LBEQ  LCDD9
+         JMP   WARMS
+
+
+.ROUTINE FOR EXECUTING A COMMAND FILE WHOSE NAME HAS BEEN
+.COPIED INTO BYTES 4-15 OF THE SYSTEM FCB
+
+OPCMDFIL LDA   #$02          SET DEFAULT EXTENSION
+         BSR   SET_EXTENSION OPEN COMMAND FILE FOR READ
+         BSR   LOFFZERO      SET LOADER OFFSET TO ZERO
+         JSR   SLOAD         LOAD FILE
+         LDB   TFRFLG        ANY TRANSFER ADDRESS?
+         BEQ   NOXFERAD         NO
+         LDB   LSTTRM      LAST TERMINATOR
+         CMPB  #";"        IS IT WAIT CHAR
+         BNE   NOWAIT
+         JSR   TYCONT
+NOWAIT   JMP   [TFRADR]      YES - SO GO EXECUTE
+
+NOXFERAD LDX   #NOTRANS     NO TRANSFER ADDRESS
+         LDA   #$81
+         JMP   LCDDE       REPORT TO USER
+
+CONSTRUCT_NAME    PSHS  A
+         LDX   #SYSFCB       POINT TO SYSTEM FCB
+         JSR   SGETFIL       GET FILENAME FROM SYSTEM BUFFER
+         PULS  A
+         BCS   NOFILETHERE   COULDN'T FIND FILENAME
+SET_EXTENSION LDX #SYSFCB    RESET TO POINT TO FCB
+         JSR   SSETEXT       SET DEFAULT EXTENSION
+         LDX   #SYSFCB       RESET AGAIN
+         LDA   #$01          OPEN FOR READ FUNCTION
+         STA   FNCODE,X
+        JSR   LD1E4
+         BCS  CMDNTFND         IF NOT FOUND
+         LDA   FILEATTR,X
+         BITA  #$04
+         BNE   RUNMASTER       RUN IN MINIMASTER
+         LDA   #$FF
+         STA   SPCOMFLG,X    BINARY FILE SUPPRESS SPACE EXSPANSION
+         RTS
+CMDNTFND JSR   SRPTERR
+         JMP   LCDE4
+
+NOFILETHERE    LDA   LSTTRM
+         CMPA  #CR
+         BEQ   LD27C
+         CMPA  DOSEOL
+         LBNE  LCDD9
+LD27C    SEC                  SET CONDITION CODE
+         RTS
+
+ERRORSTAT  EQU    $1
+
+COMBUF     EQU    $C100
+.
+.
+RUNMASTER
+           LDA    #4
+           STA    0,X
+           JSR    FMSCALL
+           BNE    CMDNTFND
+           CLR    EXITFLG      CLEAR THE EXIT FLAG AT THE BEGINNING
+           LDD    $DFCC        EXIT VECTOR
+           PSHS   D            SAVE IT
+           LDD    #MSPROG      MASTER PROGRAM EXIT ROUTINE
+           STD    $DFCC        NEW EXIT ROUTINE
+           LDD    PASSWD     GET PASSWORD
+           STD    LINBUF+128  STORE AT END OF LINE BUFFER
+           LDD    FLADDR     GET START OF COMMAND POINTER
+           STD    LINBUF+130
+           LDA    WASN         SEND POLY DEFAULT DRIVE NUMBER
+           STA    LINBUF+132
+.          SEND ALL THE LINE BUFFER TO THE MASTER
+.
+RUNM2      LDX    #LINBUF
+           LDY    #133            .MSG  LENGTH
+           LDB    #7              .MSG TYPE
+           SWI                    .TYPE 7 IS FOR MASTER DOS UTILITY REQUEST
+           FCB    43
+           BCC    CHECKCOPY       NO ERROR IN COMM
+           JSR    COMM_ERR        PRINT WAIT MSG
+           BRA    RUNM2           TRY AGAIN
+CHECKCOPY  JSR    RESTORE
+.
+.         MGS SENT WITH THE REQUEST
+.
+KEEPWAIT
+           LDX    #COMBUF
+           LDY    #256           .RETURN MSG 256 BYTE
+           SWI
+           FCB    44
+.
+.        MSG RECEIVED
+.
+          BCC    COMMOK
+          CMPA   #$02             .HAVE WE TIMED OUT?
+          BEQ    KEEPWAIT
+          BRA    ENDC1
+COMMOK    CMPB   #7
+          BEQ    ENDCMD         BRANCH IF END OF COMMAND
+          LDB    0,X+
+          CMPB   #LSTENTRY      COMPARE WITH HIGHEST FUNCTION CODE
+          BHS    KEEPWAIT       IGNORE IT AND WAIT FOR ANOTHER MESSAGE
+          ASLB
+          LDY    #JMPTAB        POINTS TO JUMP TABLE
+          JSR    [B,Y]          DO IT
+          BRA    KEEPWAIT       TRY ANOTHER MESSAGE
+ENDCMD
+          PULS   D              ENABLE EXIT VECTOR
+          STD    $DFCC
+          LDD    1,X            GET BACK LINBUF POINTER
+          STD    BUFPNT
+          CLRA
+          STA    ERRNO          .ERRORS REPORT
+ENDC1     JMP    WARMS           RETURN TO USER
+
+MSPROG    INC    EXITFLG       SET EXIT FLAG
+          RTI
+JMPTAB
+          FDB   LGETCHR
+          FDB   LPUTCHR
+          FDB   LINBUFF
+          FDB   LCE83      JUST PRINT STRING WITHOUT CR,LF
+          FDB   LPCRLF
+          FDB   LOUTDEC
+          FDB   SOUTHEX
+          FDB   SOUTADR
+          FDB   TYCONT
+          FDB   LRPTERR
+LSTENTRY  EQU   (*-JMPTAB)+>1   ASR TO GET NO OF ENTRY
+
+TYCONT    LDX    #CONTE
+          JSR    SPSTRNG
+. DROP INTO GETCHR ROUTINE
+
+LGETCHR    JSR    SGETCHR
+CREPLY    LDX    #COMBUF
+          STA    0,X
+          LDY    #1
+          BRA    REPLY
+
+LPUTCHR    LDA    0,X
+          JSR    SPUTCHR
+          RTS
+
+
+LPCRLF    JSR   PCRLF      PRINT CR,LF
+          LDA   EXITFLG    PICK UP EXIT FLAG AND SENT TO MINIMASTER
+          BRA   CREPLY     REPLY TO MINIMASTER
+
+LOUTDEC    LDB    0,X+
+          JMP    SOUTDEC
+
+LINBUFF    JSR    SINBUFF
+          LDY    #LINBUF
+          LDX    #COMBUF
+LINCOP    LDD    0,Y++
+          STD    0,X++
+          CMPY   #LINBUF+128
+          BLO    LINCOP
+          LDX    #COMBUF
+          LDY    #128
+       
+REPLY     LDB    #19                  MESSAGE RELAY
+          SWI
+          FCB    43
+          RTS
+.
+.
+DSKERROR FCB   "DISK ERROR _",EOT
+
+LRPTERR  LDX   #COMBUF
+SRPTERR    PSHS  Y,X
+         LDA   ERORSTAT,X
+         STA   ERRNO         STORE ERROR NUMBER
+         BEQ   SRPTERR_END         NO ERROR TO REPORT
+         JSR   SRSTRIO
+         LDY   ERRVCT
+         BNE   LD299
+         LDY   #ERRORSYS
+LD299    LDX   #SYSFCB
+         TST   ACTSTAT,X
+         BEQ   FILE_NOT_IN_USE
+         LDA   #4            CLOSE FILE IF ACTSTAT <>0
+         STA   FNCODE,X
+         JSR   FMSCALL
+FILE_NOT_IN_USE
+         LDA   ERRNO
+         CMPA  #$10
+         BEQ   DRIVE_NOT_READY
+         CMPA  #1            IS IT ILLEGAL FMS CALL
+         BEQ   READ_ERROR_FILE
+         CMPA  #4
+        LBLS   REPERR        REPORT ERROR WITH FILE NAME
+READ_ERROR_FILE
+         LDX   #SYSFCB+4-12
+         LDB   #11
+         JSR   LD31E         COPY "ERRORS.SYS" INTO SYS FCB
+         LDX   #SYSFCB
+         LDA   WASN
+         STA   DRIVENO,X
+         LDA   #$01          OPEN FOR READ
+         STA   FNCODE,X
+         JSR   FMSCALL       OPEN FILE FOR READ
+         BNE   LD2D7
+         LDA   ERRNO
+         DECA
+         ASRA
+         ASRA
+         INCA
+         CLR   CURRECNO,X
+         STA   CURRECNO+1,X
+         LDA   #$15
+         STA   FNCODE,X
+         JSR   FMSCALL
+         BEQ   LD2F5
+LD2D7    LDX   #DSKERROR
+         JSR   SPSTRNG       PRINT MESSAGE 'DISK ERROR -N'
+         LDX   CMDINBUF
+         LDA   ERRNO
+         STA   ERORSTAT,X
+         CLR   FNCODE,X
+         CLRB
+         JSR   SOUTDEC
+SRPTERR_END    PULS  PC,Y,X
+ 
+
+DRIVE_NOT_READY
+         LDX   0,S
+         LDA   DRIVENO,X     PICK UP DRIVE NUMBER
+         ANDA  #3
+         ADDA  #$30
+         STA   DRVNUM
+         LDX   #DVNOTRDY
+         JSR   SPSTRNG
+         BRA   SRPTERR_END
+
+LD2F5    JSR   SPCRLF
+.         LDB   #3
+.         LDX   #GREENLIN
+.         JSR   PRTSPEC       SET ERROR MESSAGE TO GREEN
+         LDX   #SYSFCB
+         LDA   ERRNO
+         DECA
+         ANDA  #$03
+         LDB   #$3F
+         MUL
+         ADDB  #4
+         STB   $22,X
+         LDB   #$FF
+         STB   59,X
+LD309    JSR   FMSCALL
+         BNE   LD2D7
+         JSR   SPUTCHR
+         CMPA  #CR
+         BEQ   LD3CR
+         CMPA  #0
+         BNE   LD309
+LD3CR    LDA   #EOT
+         STA   FNCODE,X
+         JSR   FMSCALL
+         BRA   SRPTERR_END
+
+LD31E    PSHS  Y,X
+         JMP   LD100
+
+ 
+SDOCMND    PULS  B,A
+         STD   LCC43
+         STS   LCC45
+         LDD   #NEXT_SVC
+         STD   $DFCC
+         CLR   ERRNO
+         INC   CMFLG
+         JMP   LCDB8
+
+USERCALL CLR   CMFLG
+         LDS   LCC45
+         LDB   ERRNO
+         JMP   [LCC43]
+
+SADDBX    ABX
+         RTS
+
+LOGOFFE    SWI
+           FCB   45           LOGOFF ENTRY
+
+.EXIT (BREAK) KEY SERVICING  HERE..
+.  Enter with all user regs stacked on stack from an IRQ interrupt
+.  Stack ptr points to CC Reg.
+
+BRK_SVCE LDD   ESCRTN        ON EXIT KEY JUMP VIA ESCAPE RETURN ADDRESS
+LLBSVCE  STD   10,S          REPLACE USERS PC REG WITH ESC RETN ADDRESS
+         JSR   RESTORE       RESTORED MSG IF WAIT MSG PRINTED
+         RTI                 AND GO THERE
+
+NEXT_SVC LDB   #$FE
+         STB   ERRNO
+         LDD   #USERCALL
+         BRA   LLBSVCE
+
+SINCHA   EXG   A,B
+         SWI                 CHAR IN CALL
+         FCB   01
+         EXG   A,B           NOW FALL INTO CHAR OUT TO ECHO
+SOUTCHA  EXG   A,B
+         SWI
+         FCB   5             OUTPUT CHR TO SCREEN
+         EXG   A,B
+         RTS
+
+SSTATA    PSHS  B
+         SWI
+         FCB   00            CHECK STATUS OF KBD.
+         ANDB  #$7F
+         TSTB
+         PULS  B
+         RTS
+
+NOECHO   EXG   A,B
+         SWI
+         FCB   1
+         EXG   A,B
+RETURN   RTS
+
+
+         ERRIF *>$D3E1
+         ORG   $D3E1
+
+         FDB   RETURN
+         FDB   RETURN
+         FDB   NOECHO
+         FDB   RETURN
+         FDB   RETURN
+         FDB   RETURN
+         FDB   RETURN
+         FDB   RETURN
+         FDB   RETURN
+         FDB   RETURN
+         FDB   RETURN
+STATA    FDB   SSTATA
+OUTCHA    FDB   SOUTCHA
+INCHA    FDB   SINCHA
+LD3FD    JMP   LC600
