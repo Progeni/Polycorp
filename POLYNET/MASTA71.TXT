@@ -1,0 +1,38 @@
+.MASTA70     25 5 82          NEW FMS FUNCTIONS
+
+FIRSTDIR  EQU  50             FIRST DELETED ENTRY IN FCB
+USD       EQU  FIRSTDIR
+USA       EQU  USD
+UB        EQU  USA+1
+UCC       EQU  USA+2
+
+FMSCLS    EQU  $D403          FMS CLOSE
+MASADDR   EQU  17             MASTER ADDR IS 17
+FMSADDR   EQU  $D436
+MAST_1    LDX  #MFCB
+          LDD  $1C,X          LOAD IDENTITY OF POLY
+          STD  FMSADDR
+          LDD  64,X           LOAD USER PASSWORD IF ANY
+          STD  USERPSWD
+          LDD  USD,X           LOAD USER A,B REGS
+          JSR  FMSCALL
+          LDB  1,X            ERROR STATUS BYTE
+          STD  USD,X           STORE USER A,B REGS
+          TSTB
+          CLC                 CLEAR CARRY
+          BEQ  FINS1
+          SEC                 B HAS ERROR NUMBER IN IT
+FINS1     TFR  CC,B
+          STB  UCC,X
+          LDY  #320           320 BYTES FCB
+         
+SEND_IT   LDB  MSGTYP
+          JSR  SEND
+          LDA  #MASADDR
+          STA  FMSADDR
+          JMP  NXTPOLE
+
+MAST_2    LDD  $1C,X          PICK UP POLY ID
+          STD  FMSADDR
+          JSR  FMSCLS
+          JMP  NXTPOLE

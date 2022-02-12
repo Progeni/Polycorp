@@ -1,0 +1,40 @@
+ROPEN    JSR   FDIRET     FIND THE MATCHING DIR ENTRY
+         BCS   REXIT        BRANCH IF ERROR
+         BNE   ERR04        BRANCH IF FILE NOT EXIST
+         JSR   FSTAT         CHECK FILE STATUS
+         BCS   REMFCBC       BRANCH IF ERROR
+         LDX   FCBCADR
+         JSR   TESTATR      TEST ATTRIBUTE
+         BNE   REMFCBC      BRANCH IF PROTECTED
+LD9A0    JSR   LDCC1        READ SYSTEM INFO
+         BCS   REMFCBC      BRANCH IF ERROR
+         LDD   $11,X        FILE START ADDRESS
+         STD   $40,X
+         JSR   SETACT        SET ACTIVITY STATUS
+         LDB   $17,X        LOAD FILE SECTOR MAP
+         BEQ   ROPEXT
+LD9B3    PSHS  B
+         JSR   NXTSEC       GET NEXT SECTOR
+         PULS  B
+         BCS   REMFCBC
+         DECB                .DECREMENT B BY 1
+         BNE   LD9B3
+         LDX   FCBCADR
+         CLRB
+         STB   $22,X
+ROPEXT   CLC
+REXIT    RTS                 .EXIT OPEN FOR READ OPTION
+
+
+ERR04    LDB   #$04          THE SPECIFIED FILE COULD NOT BE FOUND
+         BRA   SETCAR
+
+.ERROR IN OPENING FILE
+.REMOVE FCB FROM OPEN CHAIN
+
+REMFCBC  PSHS  B             SAVE B REGISTER
+         JSR   RSTAT
+         PULS  B             RE-INSTATE B REGISTER
+SETCAR   ORCC  #$01          SET C
+         RTS                  .EXIT
+

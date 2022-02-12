@@ -1,0 +1,789 @@
+.OPSA01  FASTER LOADER
+         NAM   OPSAXX
+         OPT   GEN
+NUL      EQU   $00
+.
+.        TELETEXT EQUATES
+.
+RED      EQU   1
+GREEN    EQU   2
+YELLOW   EQU   3
+BLUE     EQU   4
+MAGENTA  EQU   5
+CYAN     EQU   6
+WHITE    EQU   7
+FLASH    EQU   8
+STEADY   EQU   9
+SO       EQU   14
+SI       EQU   15
+BLACKBAK EQU   28
+NEWBACK  EQU   29
+.
+ .ASCII EQUATES
+.
+EOT      EQU   $04
+BS       EQU   $08
+HT       EQU   $09
+LF       EQU   $0A
+VT       EQU   $0B
+FF       EQU   $0C
+CR       EQU   $0D
+.
+.        OTHER EQUATES
+.
+SYSRAM   EQU   $C000
+CAN      EQU   $18
+ESC      EQU   $1B
+LC400    EQU   $C400
+LC410    EQU   $C410
+LC500    EQU   $C500
+LCAC0    EQU   $CAC0
+LD0F0    EQU   $D0F0
+SWI3     EQU   $DFC2
+IRQ      EQU   $DFC8
+LRARAM   EQU   $DFD0
+CPORT    EQU   $DFE0
+LE005    EQU   $E005
+LE045    EQU   $E045
+LE085    EQU   $E085
+LE090    EQU   $E090
+LE0C5    EQU   $E0C5
+LE800    EQU   $E800
+LF000    EQU   $F000
+LF001    EQU   $F001
+LF002    EQU   $F002
+LF010    EQU   $F010
+LF014    EQU   $F014
+LF020    EQU   $F020
+LF022    EQU   $F022
+LF023    EQU   $F023
+LF021    EQU   $F021
+LF024    EQU   $F024
+LF040    EQU   $F040
+LF422    EQU   $F422
+MINCH    EQU   $F804
+MINCHE   EQU   $F806
+MINCHEK  EQU   $F808
+MOUTCH   EQU   $F80A
+SDATRAM  EQU   $FFF0
+         ORG   $C080
+LINBUF   RMB   128
+.********************************
+.       0000-9FFF         USER RAM
+.        A000-BFFF           BASIC ROM #1
+.       C000-C07F         STACK AREA
+.       C080-C0FF         INPUT BUFFER
+.       C100-C6FF         UTILITY COMMAND AREA
+.        C700-DFFF           SYSTEM DOS
+.        E000-FFFF           BASIC ROM #2
+.********************************
+         ORG   CONTINUE
+LC607    LDA   #$39          ..CODE FOR RTS
+         STA   LD3FD         .INSERT AT D3FD
+         LDD   STATA
+         STD   STAT+1
+         LDD   OUTCHA
+         STD   OUTCH+1
+         STD   OUTCH2+1
+         LDD   INCHA
+         STD   INCH+1
+         STD   INCH2+1
+         CLR   SYSDAY
+         CLR   SYSMONTH
+         CLR   SYSYEAR
+         LDX   #SYSFCB
+         JSR   DDCREADY
+         LDA   #$01
+         STA   ,X
+         JSR   FMSCALL
+         BEQ   LC66E         NO ERROR
+         LDA   1,X           GET ERROR BYTE
+         CMPA  #4            SPECIFIED FILE NOT FOUND
+         BNE   LC6A2
+         JMP   WARMS
+
+LC66E    LDY   #LINBUF       RUN STARTUP FILE
+         STY   BUFPNT
+         LDB   #$80
+LC678    JSR   FMSCALL
+         BNE   LC6A2
+         DECB
+         BEQ   LC6A2
+         STA   ,Y+
+         CMPA  #CR
+         BNE   LC678
+         LDA   #EOT
+         STA   ,X
+         JSR   FMSCALL
+         JMP   RENTER
+
+LC6A2    LDX   #SUFMES
+         JSR   PSTRNG
+         JMP   WARMS
+
+SUFMES   FCB   SI,GREEN,"CANNOT RUN STARTUP FILE",SO,EOT
+         ORG   $C840
+
+SYSFCB    FCB   $FF,$00,$00,$00    .SYSTEM FCB AREA START
+         FCB   "STARTUP",NUL,"TXT",NUL
+START:   LDX   #TOPRAM
+         STX   MEMEND
+         CLR   CPUTYP
+         JMP   COLDS
+         ORG   $CC00
+
+.*****************************************
+.             LOADS OF FCB DEFINITIONS
+.*****************************************
+DOSBS    FCB   BS             TTYSET BACKSPACE CHARACTER
+DOSDEL   FCB   CAN             TTYSET DELETE CHARACTER
+DOSEOL   FCB   "*"           TTYSET END OF LINE CHARACTER
+DOSDP    FCB   0             TTYSET DEPTH COUNT
+DOSWD    FCB   0             TTYSET WIDTH COUNT
+DOSNUL   FCB   0             TTYSET NULL COUNT
+DOSTAB   FCB   0             TTYSET TAB CHARACTER
+DOSBCH   FCB   BS            BACKSPACE ECHO CHARACTER
+EJCNT    FCB   0             TTYSET EJECT COUNT
+PSEFLG   FCB   $FF           TTYSET PAUSE CONTROL
+ESCCHR   FCB   ESC           TTYSET ESCAPE CHARACTER
+SASN     FCB   0             SYSTEM DRIVE NUMBER
+WASN     FCB   0             WORKING DRIVE NUMBER
+SCRA     FCB   0             SYSTEM SCRATCH.USED BY GETFIL ET AL?
+SYSDAT                      .SYSTEM DATE AREA
+SYSMONTH FCB   0             SYSTEM MONTH BYTE
+SYSDAY   FCB   0             SYSTEM DAY BYTE
+SYSYEAR  FCB   0             SYSTEM YEAR BYTE
+LSTTRM   FCB   0             LAST TERMINATOR
+USRCTB   FDB   0           USER COMMAND TABLE ADDRESS
+BUFPNT   FDB   0           LINE BUFFER POINTER
+ESCRTN   FDB   0           ESCAPE RETURN REGISTER
+CURCHR   FCB   0             CURRENT CHARACTER
+PRVCHR   FCB   0             PREVIOUS CHARACTER
+CURLIN   FCB   0             CURRENT LINE NUMBER
+LDOFFS   FDB   0           LOADER ADDRESS OFFSET
+TFRFLG   FCB   0             TRANSFER FLAG
+TFRADR   FDB   0             TRANSFER ADDRESS
+ERRNO    FCB   0             ERROR NUMBER
+SPECIO   FCB   0             SPECIAL I/O FLAG
+OUTFLG   FCB   0             OUTPUT FLAG
+INFLG    FCB   0             INPUT FLAG
+FOFCB    FDB   0             FILE OUTPUT ADDRESS
+FIFCB    FDB   0             FILE INPUT ADDRESS
+CMFLG    FCB   0             COMMAND FLAG.CLEARED ON ERR.
+CURCOL   FCB   0             CURRENT OUTPUT COLUMN
+SCRB     FCB   0             SYSTEM SCRATCH
+MEMEND   FDB   0             MEMORY END
+ERRVCT   FDB   0             ERROR NAME VECTOR
+FIECHO   FCB   1             FILE INPUT ECHO FLAG
+SCRC     FMB   3             SYSTEM SCRATCH
+CPUTYP   FDB   0           CPU TYPE FLAG
+RESPAREA FDB   0             RESERVED PRINTER AREA POINTER
+PRARLNTH FDB   0             PRINTER AREA LENGTH
+PRDEVADR FDB   0             PRINTER DEVICE ADDRESS
+LCC3B    RMB   2             SYSTEM CONSTANTS
+FLADDR   RMB   2
+CMDINBUF RMB   2             COMMAND INPUT CHARACTER POINTER
+LCC41    RMB   2
+LCC43    RMB   2
+LCC45    RMB   2
+LCC47    RMB   2
+LCC49    FCB   $60
+LCC4A    RMB   1
+MAXFN    RMB   1             MAXIMUM FILENAME LENGTH
+LCC4C    RMB   1
+LCC4D    RMB   1
+GETMON    FCB   "GET",NUL
+         FDB   GETCALL
+         FCB   "MON",NUL
+         FDB   MONCALL
+         FCB   NUL
+LCCA0    FDB   10000,1000,100,10
+.****************************************
+         RMB   $CCC0-*
+.****************************************
+PRINIT   RTS
+        RMB   $CCD8-*
+PRRDYCHK RTS
+         RMB   $CCE4-*
+PROUTPUT RTS
+         RMB   $CCF8-*
+SCRD     FCB   $01,NUL,NUL,NUL
+PR1      FCB   NUL,NUL,NUL,NUL
+.***********************************************
+.***********************************************
+.SECTION 2 STARTS       DOS STARTS
+.*********************************
+.       CC00-D3FF         DISK OPERATING SYSTEM
+.       D400-DDFF         FILE MANAGEMENT SYSTEM
+.       DE00-DFFF         DISK DRIVERS
+.*********************************
+.NAMED     OPSBXX
+
+COLDS    JMP   SCOLDS
+
+WARMS    JMP   SWARMS
+
+RENTER    JMP   SRENTER
+
+INCH    JMP   INCH
+
+INCH2    JMP   INCH2
+
+OUTCH    JMP   OUTCH
+
+OUTCH2    JMP   OUTCH2
+
+GETCHR   JMP   MGETCHR
+
+PUTCHR   JMP   MPUTCHR
+
+INBUFF    JMP   MINBUFF
+
+PSTRNG    JMP   MPSTRNG
+
+CLASS    JMP   SCLASS
+
+PCRLF    JMP   MPCRLF
+
+NXTCH    JMP   SNXTCH
+
+RSTRIO   JMP   SRSTRIO
+
+GETFIL   JMP   SGETFIL
+
+LOAD     JMP   SLOAD
+
+SETEXT   JMP   SSETEXT
+
+ADDBX    JMP   SADDBX
+
+OUTDEC   JMP   MOUTDEC
+
+OUTHEX   JMP   MOUTHEX
+
+RPTERR   JMP   MRPTERR
+
+GETHEX   JMP   SGETHEX
+
+OUTADR   JMP   MOUTADR
+
+INDEC    JMP   SINDEC
+
+DOCMND   JMP   SDOCMND
+
+STAT    JMP   STAT
+
+RSVD1    JMP   RTS
+
+RSVD2    JMP   RTS
+
+SCOLDS    LDS   #LINBUF
+COLD2    CLR   LSTTRM
+         JSR   FMSINIT
+         CLR   CMFLG
+         JSR   LD3FD         INITIALISE I/O ADDRESSES AND GET DATE
+                            .AND RUN STARTUP FILE
+SWARMS    LDS   #LINBUF      INITIALISE SYSTEM STACK
+         JSR   DDWARM
+         LDX   #SCRD
+         STX   SCRC+1
+         CLR   CPUTYP+1
+         CLR   LCC4C
+         BSR   SRSTRIO       INITIALISE I/O POINTERS
+         LDA   LSTTRM
+         CMPA  DOSEOL        MORE COMMAND BUFFER TO PROCESS?
+         BNE   NEWCOMD       NO
+         INC   BUFPNT+1      YES  -  POINT TO IT
+         BRA   SRENTER
+
+NEWCOMD  TST   CMFLG         USER PROGRAM CALL TO FLEX?
+         LBNE  USERCALL         YES
+         JSR   FMSCLS        CLOSE ANY EXISTING FILES
+         JMP   MASTBT        GO TO START OF MINIMASTER
+.        BNE   COLD2
+.        BSR   SINBUFF       READ LINE FROM INPUT MEDIUM
+SRENTER    JSR   LD0D4       REMOVE LEADING SPACES
+         CMPA  #CR
+         BEQ   NEWCOMD       RE-PROMPT ON CARRIAGE RETURN AS FIRST
+                            .NON SPACE CHARACTER
+LCDB8    LDX   #SYSFCB
+         INC   SCRA
+         JSR   SGETFIL
+         BCS   LCDD9
+         LDX   #GETMON
+         BSR   LCE06         CHECK IF GET OR MON
+         BEQ   LCDD3
+         LDX   USRCTB
+         BEQ   LCDD6         BRANCH IF NO USER DEFINED COMMANDS
+         BSR   LCE06
+         BNE   LCDD6         BRANCH IF NOT USER DEFINED FUNCTION
+LCDD3    JMP   [$01,X]
+
+LCDD6    JSR   OPCMDFIL      GO OPEN COMMAND FILE
+LCDD9
+         LDA   #$15
+LCDDE    STA   ERRNO
+.LCDE1    JSR   SPSTRNG
+LCDE4    CLR   LSTTRM
+         JMP   SWARMS        RETURN POINT AFTER COMMAND LINE
+                            .HAS BEEN PROCESSED
+
+SRSTRIO    LDX   OUTCH2+1
+         STX   OUTCH+1
+         LDX   INCH2+1
+         STX   INCH+1
+         CLR   INFLG
+         CLR   OUTFLG
+         CLR   SPECIO
+         CLR   FIFCB
+         CLR   FOFCB
+RTS    RTS
+
+LCE06    LDY   #SYSFCB+FILENAME
+LCE0A    LDA   ,Y+
+         CMPA  #$5F          LOWER CASE TO UPPER CASE CONVERSION
+         BLS   LCE12
+         SUBA  #$20
+.
+.        IDENTIFY IF BUILT IN COMMAND - 'GET' OR 'MON'
+.
+LCE12    CMPA  ,X+
+         BNE   LCE1E
+         TST   ,X
+         BNE   LCE0A
+         TST   ,Y
+         BEQ   LCE2A
+LCE1E    TST   ,X+
+         BNE   LCE1E
+         LEAX  $02,X
+         TST   ,X
+         BNE   LCE06
+         ANDCC #$FB          SET 'NE' CONDITION
+LCE2A    RTS
+
+.SINBUFF
+.SPSTRNG
+.SPCRLF
+.SGETCHR
+.SPUTCHR
+.SOUTDEC
+.SOUTADR
+.SOUTHEX
+.SRPTERR
+SCLASS    CMPA  #"0"
+         BCS   INVCHAR
+         CMPA  #"9"
+         BLS   VALCHAR
+         CMPA  #"A"
+         BCS   INVCHAR
+         CMPA  #"Z"
+         BLS   VALCHAR
+         CMPA  #"a"
+         BCS   INVCHAR
+         CMPA  #"z"
+         BLS   VALCHAR
+INVCHAR  SEC                  SET CONDITION CODE
+         STA   LSTTRM
+         RTS
+
+VALCHAR  CLC                  CLEAR CONDITION CODE
+         RTS
+
+SNXTCH    PSHS  X
+         LDX   BUFPNT
+         LDA   CURCHR
+         STA   PRVCHR
+LD019    LDA   ,X+
+         STA   CURCHR
+         CMPA  #CR
+         BEQ   VALDTERM
+         CMPA  DOSEOL
+         BEQ   VALDTERM
+         STX   BUFPNT
+         CMPA  #" "
+         BNE   VALDTERM
+         CMPA  ,X
+         BEQ   LD019         CONTINUE TILL 'NE' CONDITION SET
+VALDTERM BSR   SCLASS
+         PULS  PC,X
+
+SGETFIL   LDA   #$15         AN ILLEGAL DRIVE NO. SPECIFIED
+         STA   ERORSTAT,X
+         LDA   #$FF
+         STA   DRIVENO,X
+         CLR   FILENAME,X
+         CLR   FILEEXT,X
+         JSR   LD0D4         POINT TO NEXT CHARACTER IN INPUT LINE
+         LDA   #$08
+         STA   MAXFN
+         BSR   LD080
+         BCS   LD07C
+         BNE   NOTFSTOP      BRANCH IF NOT FULL STOP
+.
+.        DRIVE SPECIFIED  -  DEFAULT IS TO BE OVERRIDDEN
+.
+         BSR   LD080
+         BCS   LD07C
+         BNE   NOTFSTOP      BRANCH IF NOT FULL STOP
+         CMPX  CMDINBUF      ENSURE FILENAME NOT NULL
+         BEQ   SETERR
+         BSR   LD080
+         BLS   SETERR
+NOTFSTOP LDX   CMDINBUF
+         TST   FILENAME,X
+         BEQ   SETERR
+         TST   DRIVENO,X
+         BPL   LD079
+         TST   SCRA
+         BEQ   LD074
+         LDA   SASN
+         BRA   LD077
+
+LD074    LDA   WASN
+LD077    STA   DRIVENO,X
+LD079    CLR   SCRA
+LD07C    LDX   CMDINBUF      RESET X TO CURRENT CHARACTER POINTER
+         RTS
+
+LD080    BSR   SNXTCH
+         BCS   SETERR
+         CMPA  #"9"          CHECK IS COMMAND PRECEDED BY DRIVE NO.
+         BHI   ALPHACHR
+         LDX   CMDINBUF
+         TST   DRIVENO,X
+         BPL   SETERR
+         ANDA  #$03          CONVERT ASCII DRIVE NO. TO BINARY
+         STA   DRIVENO,X
+         JSR   SNXTCH
+         BCC   SETERR        BRANCH IF CHARACTER ALPHANUMERIC
+LD098    CMPA  #"."
+         CLC                  CLEAR CONDITION CODE
+         RTS
+
+ALPHACHR LDB   MAXFN         LOAD B WITH MAXIMUM FILENAME LENGTH
+         BMI   SETERR
+         PSHS  B
+         SUBB  #$05
+         STB   MAXFN
+         PULS  B
+LD0AB    CMPA  LCC49
+         BLO   LD0B2
+         SUBA  #$20          CONVERT LOWER CASE TO UPPER CASE
+LD0B2    STA   FILENAME,X    COPY FILENAME TO NAME WORK BUFFER
+         LEAX  $01,X
+         DECB
+         JSR   SNXTCH
+         BCC   LD0C4
+.
+.        CHECK FOR 2 OTHER VALID CHARACTERS IN FILENAME
+.
+         CMPA  #"-"
+         BEQ   LD0C4
+         CMPA  #"_"
+         BNE   LD0CA
+LD0C4    TSTB
+         BNE   LD0AB
+SETERR   SEC                  SET CONDITION CODE
+         RTS
+
+LD0CA    TSTB
+         BEQ   LD098
+         CLR   FILENAME,X    CLEARING REST OF FILENAME BUFFER
+         LEAX  $01,X
+         DECB
+         BRA   LD0CA
+
+LD0D4    STX   CMDINBUF      STORE ADDRESS OF LAST CHARACTER
+                            .IN INPUT BUFFER +1
+         LDX   BUFPNT
+LD0DA    LDA   ,X
+         CMPA  #" "          IGNORE LEADING SPACES
+         BNE   LD0E4
+         LEAX  $01,X
+         BRA   LD0DA
+
+LD0E4    STX   BUFPNT
+         LDX   CMDINBUF
+         RTS
+
+SSETEXT    PSHS  Y,X
+         LDB   FILEEXT,X
+         BNE   LD109
+         LDY   #DEFEXT
+         CMPA  #$0B
+         BHI   LD109
+         LDB   #$03
+         MUL
+         LEAY  B,Y
+         LDB   #$03
+LD100    LDA   ,Y+
+         STA   $0C,X
+         LEAX  $01,X
+         DECB
+         BNE   LD100
+LD109    PULS  PC,Y,X
+
+DEFEXT   FCB "BIN","TXT","CMD","BAS","SYS","BAK"
+         FCB "SCR","DAT","BAC","DIR","PRT","OUT"
+SGETHEX    JSR   LD21E
+LD132    JSR   SNXTCH
+         BCS   LD159
+         BSR   LD15F
+         BCS   LD153
+         PSHS  B
+         LDB   #EOT
+LD13F    ASL   LDOFFS+1
+         ROL   LDOFFS
+         DECB
+         BNE   LD13F
+         PULS  B
+         ADDA  LDOFFS+1
+         STA   LDOFFS+1
+         INCB
+         BRA   LD132
+
+LD153    JSR   SNXTCH
+         BCC   LD153
+         RTS
+
+LD159    LDX   LDOFFS
+         CLC                  CLEAR CONDITION CODE
+         RTS
+
+LD15F    SUBA  #$47
+         BPL   LD172
+         ADDA  #$06
+         BPL   LD16B
+         ADDA  #$07
+         BPL   LD172
+LD16B    ADDA  #LF
+         BMI   LD172
+         CLC                  CLEAR CONDITION CODE
+         RTS
+
+LD172    SEC                  SET CONDITION CODE
+         RTS
+
+SINDEC    JSR   LD21E
+LD178    JSR   SNXTCH
+         BCS   LD159
+         CMPA  #$39
+         BHI   LD153
+         ANDA  #$0F
+         PSHS  B
+         PSHS  A
+         LDD   LDOFFS
+         ASLB
+         ROLA
+         ASLB
+         ROLA
+         ASLB
+         ROLA
+         ADDD  LDOFFS
+         ADDD  LDOFFS
+         ADDB  ,S+
+         ADCA  #$
+         STD   LDOFFS
+         PULS  B
+         INCB
+         BRA   LD178
+
+
+.***************************************
+.      LOADER ROUTINE
+.***************************************
+BYTECNT  FCB   0
+
+SLOAD    CLR   TFRFLG        NO XFER ADDRESS YET
+         BSR   NEXRECRD      READ FIRST SECTOR
+         BRA   STILLDAT      FIRST TIME ONLY
+TWOOR16  DECB                ANY DATA LEFT
+         BNE   STILLDAT      YES
+         BSR   NEXRECRD      
+STILLDAT LDA   ,U+
+         CMPA  #2            IS IT LOAD ADDRESS
+         BEQ   LOADADDR      YES
+         CMPA  #$16          IS IT TRANSFER ADDRESS?
+         BNE   TWOOR16       NO
+         DECB                ANY LEFT?
+         BNE   XFERMS        YES
+         BSR   NEXRECRD
+XFERMS   LDA   ,U+           MS BYTE OF TRANSFER ADDRESS
+         STA   TFRADR        STORE FOR SYSTEM
+         DECB                ANY LEFT?
+         BNE   XFERLS        YES
+         BSR   NEXRECRD
+XFERLS   LDA   ,U+           LS BYTE OF TRANSFER ADDRESS
+         STA   TFRADR+1      STORE FOR SYSTEM
+         LDA   #1
+         STA   TFRFLG        NOW HAVE A TRANSFER ADDRESS
+         BRA   TWOOR16
+
+LOADADDR DECB                ANY LEFT?
+         BNE   LOADMS
+         BSR   NEXRECRD
+LOADMS   LDA   ,U+           MS BYTE OF LOAD ADDRESS
+         STA   ,--S          PUT MS LOAD ADDRESS IN RIGHT PLACE ON STACK
+         DECB                ANY LEFT?
+         BNE   LOADLS
+         BSR   NEXRECRD
+LOADLS   LDA   ,U+           LS BYTE OF LOAD ADDRESS
+         STA   1,S           PUT LS LOAD ADDRESS IN RIGHT PLACE ON STACK
+         PULS  Y             TAKE LOAD ADDRESS OFF STACK INTO 'Y'
+         PSHS  B             SAVE 'B' ON STACK
+         LDD   LDOFFS        LOADER OFFSET
+         LEAY  D,Y           ADD LOADER OFFSET TO 'Y'
+         PULS  B             RESTORE B
+         DECB                ANY LEFT?
+         BNE   BYTECO
+         BSR   NEXRECRD
+BYTECO   LDA   ,U+
+         STA   BYTECNT
+MOREDATA DECB                ANY LEFT?
+         BNE   XFERDATA
+         BSR   NEXRECRD
+XFERDATA LDA   ,U+
+         STA   ,Y+
+         DEC   BYTECNT
+         BNE   MOREDATA
+         BRA   TWOOR16
+
+NEXRECRD LDX   #SYSFCB
+         LDD   $40,X         NEXT TRACK/RECORD
+         BNE   GOREAD
+         BRA   ENDLOAD       FINISHED
+
+
+GOREAD   STD   $1E,X         TRACK/SECTOR TO CURRENT TRACK/SECTOR
+         LDB   #9            FMS READ FUNCTION CODE
+         STB   FNCODE,X
+         JSR   FMSCALL       GO DO IT
+         BNE   RETRY         ERRORS
+
+RESET    LDB   #$FC          RESET NUMBER OF BYTES IN RECORD
+         LEAU  $44,X         SET 'U' TO BEGINNING OF BUFFER
+         RTS                 GOOD READ - CARRY ON
+
+LD1E4    LDX   #SYSFCB       COMES HERE FROM OPCMDFIL!!!!
+         JSR   FMSCALL
+         BEQ   LD1FD
+RETRY    LDA   ERORSTAT,X    GET RETURN STATUS
+         CMPA  #8            END OF FILE?
+         BNE   LD200         NO
+ENDLOAD  LEAS  $2,S          JUMP OVER PREVIOUS RETURN ADDRESS
+         LDA   #4            CLOSE FILE FUNCTION
+         STA   FNCODE,X
+         JSR   FMSCALL       GO CLOSE FILE
+         BNE   LD20A         ERROR CLOSING FILE
+LD1FD    CLC
+         RTS
+
+LD200    STA   ERRNO
+         CMPA  #4            'FILE NOT FOUND' ERROR
+         BNE   LD20A
+         SEC
+         RTS
+
+.LD20A   LBSR   SRPTERR       GO TYPE OUT ERROR
+LD20A    JMP   LCDE4
+
+GETCALL    LDA   #NUL
+         BSR   LD248
+         BCS   LD224
+         BSR   LD21E
+         INC   LCC4C
+         LBSR  SLOAD
+         BRA   GETCALL
+
+LD21E    CLRA
+         CLRB
+         STD   LDOFFS
+         RTS
+
+LD224    LDB   LCC4C
+         LBEQ  LCDD9
+         JMP   WARMS
+
+OPCMDFIL LDA   #$02          SET DEFAULT EXTENSION
+         BSR   LD254
+         BSR   LD21E
+         JSR   SLOAD
+         LDB   TFRFLG
+         BEQ   LD240
+         LDB   LSTTRM
+         CMPB  #";"
+         BNE   SEXEC
+         JSR   TYCONT        WAIT FOR A CHAR
+SEXEC    JMP   [TFRADR]
+
+LD240
+         LDA   #$81
+         JMP   LCDDE
+
+LD248    PSHS  A
+         LDX   #SYSFCB
+         JSR   SGETFIL
+         PULS  A
+         BCS   LD26E
+LD254    LDX   #SYSFCB
+         JSR   SSETEXT
+         LDX   #SYSFCB
+         LDA   #$01          OPEN FOR READ FUNCTION
+         STA   FNCODE,X
+        JSR   LD1E4
+         LBCS  ERRCMD           IF NOT FOUND
+         LDA   #$FF
+         STA   SPCOMFLG,X    BINARY FILE SUPPRESS SPACE EXSPANSION
+ERRCMD   RTS
+
+LD26E    LDA   LSTTRM
+         CMPA  #CR
+         BEQ   LD27C
+         CMPA  DOSEOL
+         LBNE  LCDD9
+LD27C    SEC                  SET CONDITION CODE
+         RTS
+
+ 
+SDOCMND    PULS  B,A
+         STD   LCC43
+         STS   LCC45
+         CLR   ERRNO
+         INC   CMFLG
+         JMP   LCDB8
+
+USERCALL CLR   CMFLG
+         LDS   LCC45
+         LDB   ERRNO
+         JMP   [LCC43]
+
+SADDBX    ABX
+         RTS
+
+MONCALL  SWI
+         FCB   55            CALL M/C CODE MONITOR
+         JMP   SWARMS
+
+LD361    FCB   "ERRORS",NUL,NUL,"SYS"
+         RMB   4
+
+
+SINCHA    TST   LD3DE
+         BEQ   LD397
+         JSR   [LD3DE]
+SOUTCHA    RTS
+
+SSTATA    ORCC  #$04         SET Z BIT
+         RTS
+
+LD397    RTS
+
+
+LD39B    SWI
+         FCB   01            GET 1 CHARACTER FROM KEYBOARD
+LD3DE    FDB   $00
+LD3E5    FDB   LD39B
+STATA    FDB   SSTATA
+OUTCHA    FDB   SOUTCHA
+INCHA    FDB   SINCHA
+LD3FD    JMP   LC607

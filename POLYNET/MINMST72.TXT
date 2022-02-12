@@ -1,0 +1,102 @@
+.MINMST70      25/5/82       NEW OPERATING SYS WITH NEW FMS
+
+.MINMST66      11/5/82       FIXED LOG ON BUG
+               .1/6/82       ADDED PRINT PAGE FEATURE
+.MINMST65      8/3/82        ADDED MESSAGE RELAY BETWEEN MASTER AND POLY
+              .5/4/82        FIXED FOR UP TO 3 SLAVES
+             .14/4/82        SPOOLER FIXED, QUEUE FULL MESSAGE
+             .15/4/82        SINGLE SPACE, 132 CHARS, NO HEAD OPTIONS
+.MINMST62      5/2/82        NEW SYSTEM ROM NEW BASIC ADDED AND ALLOW FOR
+.                            BROADCAST
+.MINMST60      10.11.81      HIGH SPEED COMMS !!!!!!
+.MINMST51      28.8.81       TRKBUF AT $0000-$0FFF. WK DRV =0
+
+.MINMST50      24.8.81       ADAPTED FOR MINIMASTER
+                             .ORIGIN $4800 TO FIT INTO 32K OF TOTAL MEMORY
+                             .KEYSWITCH TESTS BYPASSED !  (IN MSGPRXX)
+
+
+.MASTER21      19/7/81       MENU TO ALWAYS CHAIN IF NOT BROADCAST;
+.                            TIDY UP COMMS ERR MSG ON PRINTER
+
+.MASTER20      30/6/81       ALLOW BROADCAST MSGS, DIRECT LOAD OF
+.                            OPSYS, BASIC, MENU ETC, FAST TRACK READ
+
+.MASTER11      8/6/81        CHECK FOR DISK BEING CHANGED & INIT BUFFERS IF SO
+
+.MASTER10      6/6/81        SECTOR BUFFERING IN MEMORY
+
+.MASTER04      5/6/81       LOOP SETUP EVERY 5 SECONDS
+                           . SPECPOL UNTIL DATE OBTAINED
+                           . SEND RETRY LIMIT INCREASED
+                           . NO LOOP SETUP IN SPECPOL OR SEND
+
+.MASTER03      23/5/81       SET UP FOR POLYWOG MASTER
+
+.MASTBOOT      19.5.81       RSSECT USED TO READ SINGLE SECTOR
+                             . MSG PRINTING FIXED
+.     DISK   NUMBER   11
+
+TOP_OF_FREE_MEM  EQU  $CC2B   POINTER LOCATION
+SYSDAY           EQU  $CC0F
+SYSMONTH         EQU  $CC0E
+SYSYEAR          EQU  $CC10
+SASN      EQU   $CC0B
+WASN      EQU   $CC0C
+DOCMND    EQU   $CD4B
+GETFIL    EQU   $CD2D
+SETEXT    EQU   $CD33
+LINBUF    EQU   $C080
+SYSDAT    EQU   $CC0E
+BUFPNT    EQU   $CC14
+FMSCALL   EQU   $D406
+NXTTS     EQU   64
+FMSCLOSE  EQU   $D403    . *** 21 MAY
+PQREQS    EQU   12         PRINT-QUEUE REQUEST SIZE
+
+EOT      EQU   $04
+LOADREQ  EQU   $10
+LOAD     EQU   $10
+LMODULE  EQU   $11
+TIME:    EQU    $DFF3        TIME AND TIMELS MAY CHANGE*******
+TIMELS:  EQU    TIME+1
+
+KBDPIA   EQU   $E00E
+
+MSGRELAY EQU   19
+
+
+BEGIN   BRA   START1
+VERSION FCB   $87,$2E,$80    VERSION NUMBER "7.0"
+START1  NOP                  DUMMY
+
+.         ORG   $CCC1
+.         JMP   MGETCHR
+.         JMP   MPUTCHR
+.         JMP   MINBUFF
+.         JMP   MPSTRNG
+.         JMP   MPCRLF
+.         JMP   MOUTDEC
+.         JMP   MOUTHEX
+.         RMB   3             RESERVE BY PRINTER SPOOLER
+.         JMP   MOUTADR
+
+        ORG    START1
+  
+        LIB    MSGPR72
+.
+.************************************
+.
+        LIB   MASTA71
+.
+.************************************
+.
+        LIB   MCOMMP71
+.
+.************************************
+.
+        LIB   SPOOL70
+.
+.************************************
+FCBADR  EQU   *
+         END   MASTBT

@@ -1,0 +1,613 @@
+.SPOOL70                     EASY TO PATCH, BUG FIXED
+.SPOOL66                     25 5 82    TAKEN OUT SOME UNUSED CODES
+                             .1 6 82    PRINT PAGE FEATURE
+                             .12 7 82   PRINTS NULLS FOR GRAPHICS
+.SPOOL65                     14 4 82    BUG FIXED, QUEUE FULL MESSAGE
+                             .SINGLE SPACE, 132 CHARS, NO HEAD OPTIONS
+.SPOOL62                     5 2 82    DELETED SYSTEM REPORT
+.SPOOLER VERSION 0.0.0       18.5.81   COURTESY OF C.S.D
+.
+PQSIZE   EQU   19            MAXIMUM ENTRIES ALLOWED IN PRINT QUEUE
+ACIAC    EQU   $E008         PRINTER - CONTROL REGISTER
+ACIAD    EQU   ACIAC+1                 DATA REGISTER
+ACIAS    EQU   ACIAC                   STATUS REGISTER
+FNCODE   EQU   0             FMS FUNCTION CODE OFFSET
+STATUS   EQU   0             SPOOLER STATUS BYTE OFFSET
+FILENAME EQU   4             FCB FILENAME OFFSET
+DRIVER   EQU   3             FCB DRIVER NUMBER OFFSET
+FF       EQU   $0C           TOP OF PAGE
+CR       EQU   $0D           CARRIAGE RETURN
+LF       EQU   $0A           NEW LINE
+NUL      EQU   $00           NULL CHARACTER
+EXT      EQU   $0C           FCB EXTENSION OFFSET
+DC2      EQU   $12
+DC4      EQU   $14
+ESC      EQU   $1B
+SO       EQU   $0E
+PQES     EQU   13            PRINT QUEUE ENTRY SIZE
+CURPOS   EQU   30           CURRENT POSITION
+BELL     EQU   $07          LINE PRINTER ALARM
+
+
+         ORG   $5400
+
+
+RESUME   JMP   SP_CONTINUE
+SUSPEND  RTS
+
+
+
+ACTION   FCB   0             SPOOLER CURRENT ACTION CODE
+XSAVE    FDB   0             THE VALUE TO BE PLACED IN THE X REGISTER
+LLQFUL   FCB   3
+LLQNF    FCB   4
+LLSPFG   FCB   0
+LLHDFG   FCB   0
+LLCOFG   FCB   0
+LLELFG   FCB   0
+LLSCHR   FCB   0
+LLGRFG   FCB   0
+LLPGFG   FCB   0
+LLCOUNT  FCB   0
+LLCHAR   FCB   0
+LLLENG   FCB   0
+CHWIDTH  FDB   0
+SPOOLENTRY
+         FDB   0             SET TO 0 INITIALLY
+TABLEFCB FMB   30,NUL       FIRST 64 BYTES OF FCB
+         FDB   $0004        TRACK 0 SECTOR 4
+         FMB   32,NUL
+PRINTQS  FMB   PQSIZE*PQES,NUL  PRINT QUEUE TABLE
+PRINTQE  FMB   256-(*-PRINTQS),NUL   END OF PRINT QUEUE TABLE
+
+.STATE TRANSITION TABLE
+.
+. 0: LOOK FOR ENTRY IN QUEUE; IF FOUND GOTO 1 ELSE GOTO 12
+.12: IDLE; GOTO 12
+. 1: OPEN PRINT FILE; GOTO 15
+.15: PRINT CONTROL; GO TO 16
+.16: IF HEADER GO TO 2 ELSE GO TO 17
+. 2: PRINT ROW OF "*"; GOTO 21
+. 7: PRINT "LISTING OF <f-n>"; GOTO 22
+. 8: PRINT ROW OF "*"; GOTO 9
+. 9: SPACE VERTICALLY; GOTO 17
+.17: SET CONTROL FOR ELONGATED OR COMPRESSED; GOTO 19
+. 3: IF END OF FILE GOTO 20 ELSE WHILE NOT EOL DO 3; GOTO 6
+.18: IF HEADING THEN GOTO 5 ELSE GOTO 4
+. 6: IGNORE LINEFEED AFTER CR;
+.    IF DSP PRINT LINEFEED OR FORMFEED;
+.    PRINT LINEFEED OF FORMFEED; GOTO 19
+. 5: SPACE VERTICALLY; GOTO 10
+.10: PRINT ROW OF "*"; GOTO 4
+. 4: CLOSE PRINT FILE; GOTO 11
+.11: PRINT FORMFEED; GOTO 0
+.19: PRINT CONTROL; GOTO 3
+.20: PRINT RESET; GOTO 18
+.21: PRINT CONTROL; GOTO 7
+.22: PRINT CONTROL; GOTO 8
+.
+.ADD ENTRY: GOTO 0
+.DELETE ENTRY: IF PRINTING DELETED FILE GOTO 4
+.SUSPEND REQUEST: GOTO 13 (IDLE)
+.RESUME REQUEST: GOTO WHERE LEFT OFF
+.SUSPEND DOES NOT CURRENTLY WORK
+.PRINT FORMFEED OR LINEFEED:
+.IF PAGE THEN
+.   DECREMENT COUNT
+.   IF COUNT = 0
+.      COUNT := LINCNT;
+.      PRINT FORMFEED
+.   ELSE
+.      PRINT LINEFEED
+.   FI
+.ELSE
+.   PRINT LINEFEED
+.FI
+
+JLIST    FDB   SRCHFILE      SPOOLER ACTION CODE 0
+         FDB   OPINFILE                          1
+         FDB   HEADERL                           2
+         FDB   PRNTBYTE                          3
+         FDB   CLSEFILE                          4
+         FDB   HEADERL                           5
+         FDB   LINEFEED                          6
+         FDB   HEADERL                           7
+         FDB   HEADERL                           8
+         FDB   HEADERL                           9
+         FDB   HEADERL                           10
+         FDB   HEADERL                           11
+         FDB   SP_IDLE                           12
+         FDB   SP_IDLE                           13
+         FDB   SP_BELL
+         FDB   HEADERL                           15
+         FDB   CONTROL                           16
+         FDB   WIDTH                             17
+         FDB   RESET                             18
+         FDB   HEADERL                           19
+         FDB   HEADERL                           20
+         FDB   HEADERL                           21
+         FDB   HEADERL                           22
+ALIST    FCB   1,15,21,20,11,10,6,22,9,17,4,0,12,13,14,16,2
+         FCB   19,5,3,18,7,8
+ARETURN  FCB   0
+XLIST    FDB   SPOOLFCB
+         FDB   HEADER
+         FDB   HEADING
+         FDB   RESETH
+         FDB   TRAILER
+         FDB   ASTERISK
+         FDB   *
+         FDB   HEADER
+         FDB   SPACING
+         FDB   *
+         FDB   SPOOLFCB
+         FDB   PRINTQS
+         FDB   *
+         FDB   *
+         FDB   *
+         FDB   *
+         FDB   ASTERISK
+         FDB   *
+         FDB   SPACING
+         FDB   SPOOLFCB
+         FDB   *
+AHDNAME  FDB   HEADNAME
+         FDB   ASTAR1
+LINCNT   FCB   60
+NOLG     FCB   80
+COLG     FCB   132
+ELLG     FCB   40
+         FMB   2,LF
+ELCHR    FCB   SO
+         FMB   4,NUL
+         FMB   2,LF
+COCHR    FCB   SI
+         FMB   4,NUL
+         FMB   2,LF
+NOCHR    FMB   5,NUL
+HEADER   FCB   DC2
+         FCB   DC4
+         FCB   ESC,'2'
+         FCB   ESC,'9'
+         FCB   ESC,'F'
+         FCB   ESC,'H'
+         FMB   5,NUL
+RESETH   FCB   DC2
+         FMB   14,NUL
+HEADING  FCB   CR
+         FMB   2,LF
+         FCB   SO,ESC,'E'
+         FMB   2,NUL
+HEADNAME FMB   21,' '
+         FCB   'LISTING OF  '
+LISTNAME FMB   14,NUL
+
+ASTERISK FCB   LF
+ASTAR1   FCB   CR
+         FCB   LF
+         FMB   132,'*'
+ASTEND   FCB   CR
+         FCB   NUL
+SPACING  FCB   CR
+         FMB   3,LF
+         FCB   NUL
+TRAILER  FCB   CR
+         FCB   FF
+         FCB   NUL
+SPOOLFCB FMB   320,$00
+.
+.
+.
+SPOOLER  LDA   ACTION        LOAD SPOOLER CURRENT ACTION CODE
+         ASLA
+         LDX   XSAVE         RE-INSTATE X REGISTER
+         LDY   #JLIST         LOAD ADDRESS OF JUMP LIST TABLE
+         JMP   [A,Y]         JUMP TO REQUIRED ACTION
+  
+ 
+
+SP_BELL
+         LDA   ACIAS
+         BITA  #2
+         BEQ   SP_IDLE
+         LDA   #BELL
+         STA   ACIAD
+         RTS
+
+
+
+SP_SUSPEND
+         LDA   ACTION
+         CMPA  #13
+         BEQ   SP_IDLE
+         STA   ARETURN
+         LDA   #13
+         STA   ACTION
+         RTS
+
+
+
+SP_CONTINUE
+         LDA   ARETURN
+         STA   ACTION
+         RTS
+
+
+
+SP_IDLE 
+         RTS
+
+
+
+SRCHFILE CMPX  #$0000        CHECK IF FIRST RUN OF PROGRAM
+         BNE   FIRSTTIME
+         LDB   NOLG
+         SUBB  #32
+         SUBB  #100
+         BGE   LLSNAS
+         LDX   #ASTEND
+         LDA   #CR
+         STA   B,X
+         INCB
+         LDA   #NUL
+         STA   B,X
+         LDX   AHDNAME
+         LEAX  13,X
+         STX   AHDNAME
+LLSNAS   LDA   #3            INITIALISE PRINTER
+         STA   ACIAC
+         LDA   #$11
+         STA   ACIAC
+         LDX   #PRINTQS
+         STX   XSAVE
+SLOOPA   CLR   ,X+
+         CMPX  #PRINTQE
+         BLO   SLOOPA
+STARTOK  LDA   #0
+         STA   ACTION
+         RTS
+
+
+
+NOENTRIES
+         LDA   #12
+         STA   ACTION
+         RTS
+ 
+ 
+NEXTENTRY
+         LEAX  PQES,X          GET NEXT ENTRY
+         CMPX  #PRINTQE       CHECK IF END OF PRINT QUEUE
+         BGE   NOENTRIES
+FIRSTTIME
+         LDA   STATUS,X       TEST STATUS BYTE
+         BZS   NEXTENTRY      BRANCH IF ENTRY NOT USED
+         STX   SPOOLENTRY     SAVE ENTRY POINTER
+         LEAX  1,X
+         CLR   LLSPFG
+         CLR   LLHDFG
+         CLR   LLCOFG
+         CLR   LLELFG
+         CLR   LLPGFG
+         CLR   LLGRFG
+         LDA   LINCNT
+         STA   LLCOUNT
+         LDB   ,X
+         TFR   B,A
+         ANDA  #$03
+         STA   ,X
+         ASLB
+         BCC   LLRD1
+         INC   LLHDFG
+LLRD1    ASLB
+         BCC   LLRD2
+         INC   LLGRFG
+         BRA   LLSPSP
+LLRD2    ASLB
+         BCC   LLRD3
+         INC   LLCOFG
+LLRD3    ASLB
+         BCC   LLRD4
+         INC   LLPGFG
+LLRD4    ASLB
+         BCC   LLRD5
+         INC   LLELFG
+LLRD5    ASLB
+         BCC   LLSPSP
+         INC   LLSPFG
+LLSPSP   LDY   #(SPOOLFCB+DRIVER)
+         LDB   #PQES-1
+COPY     LDA   ,X+            TRANSFER FILENAME TO FCB
+         STA   ,Y+
+         DECB
+         BNE   COPY
+         LDA   #1              SET FMS OPEN FOR READ FUNCTION CODE
+         LDX   #SPOOLFCB
+         STA   FNCODE,X
+         STX   XSAVE          RESET X REGISTER SAVE VALUE
+         STA   ACTION         RESET SPOOLER ACTION CODE
+         LDB   #8
+         LDX   #LISTNAME    TRANSFER LISTFILE NAME TO HEADING
+         LDY   #(SPOOLFCB+FILENAME)
+LOOPAA   LDA   ,Y+
+         BZS   FSTOP
+         STA   ,X+
+         DECB
+         BNE   LOOPAA
+FSTOP    LDA   #'.'         INSERT A FULL STOP INTO THE NAME
+         STA   ,X+
+         LDY   #(SPOOLFCB+EXT)
+         LDB   #3
+LOOPAB   LDA   ,Y+          ADD IN THE EXTENSION
+         BZS   ESTOP
+         STA   ,X+
+         DECB
+         BNE   LOOPAB
+ESTOP    LDA   #LF
+         STA   ,X+
+         CLRA
+         STA   ,X
+         RTS
+ 
+.
+.
+.
+ 
+OPINFILE JSR   FMSCALL        OPEN THE FILE
+         BEQ   TAGUSED
+         LDA   #0
+         STA   ACTION         RESET SPOOLER ACTION CODE
+         LDX   #PRINTQS
+         STX   XSAVE          RESET XSAVE
+         LDX   SPOOLENTRY
+         STA   STATUS,X       SET SPOOLER STATUS TO FREE
+         RTS
+TAGUSED  TST   23,X
+         BNE   LLRSSC
+         LDA   15,X
+         BITA  #$02
+         BEQ   LLRSSC1
+LLRSSC   LDA   #$FF
+         STA   59,X
+LLRSSC1  LDX   SPOOLENTRY
+         LDA   #2
+         STA   STATUS,X
+        LBRA   HEADERF
+ 
+.
+.
+.
+ 
+PRNTBYTE LDA   ACIAS          CHECK PRINTER READY
+         BITA  #2
+         BEQ   NOTREADY
+         TST   LLSCHR
+         BEQ   LLPRCT1
+         LDA   LLSCHR
+         CLR   LLSCHR
+         BRA   LLPRCT
+LLPRCT1  JSR   FMSCALL        READ NEXT BYTE
+         BNE   CHRERROR
+LLPRCT   TST   LLGRFG
+         BNE   LLPRCT2
+         CMPA  #"_"
+         BNE   LLPRCT2
+         LDA   #"#"
+LLPRCT2  STA   ACIAD
+         TST   LLGRFG
+         BNE   NOTREADY
+         CMPA  #CR          IS CHARACTER A CARRIAGE RETURN
+         BNE   NOTEOL
+         LDA   LLLENG
+         STA   LLCHAR
+         LDA   #6            RESET ACTION CODE
+         STA   ACTION
+NOTREADY RTS
+NOTEOL   DEC   LLCHAR
+         BNE   NOTREADY
+         LDA   LLLENG
+         STA   LLCHAR
+         JSR   FMSCALL
+         BNE   CHRERROR
+         STA   LLSCHR
+         CMPA  #CR
+         BEQ   NOTREADY
+         LDX   CHWIDTH
+         BRA   LLLFA2
+ 
+CHRERROR LDA   #4             SET FMS CLOSE FILE OPTION
+         STA   FNCODE,X
+        LBRA   HEADERF
+ 
+LINEFEED LDA   #3
+         STA   ACTION
+         JSR   FMSCALL
+         BNE   CHRERROR
+         CMPA  #LF
+         BEQ   LLSPCR
+         STA   LLSCHR
+LLSPCR   LDX   CHWIDTH
+         LEAX  -1,X
+         TST   LLSPFG
+         BEQ   LLLFA1
+LLLFA2   LEAX  -1,X
+LLLFA1   STX   XSAVE
+         LDA   #19
+         STA   ACTION
+         RTS
+
+CONTROL  TST   LLHDFG
+        LBEQ   HEADERF
+         LDA   #17
+         STA   ACTION
+         RTS
+  
+WIDTH    LDA   NOLG
+         LDX   #NOCHR
+         TST   LLELFG
+         BEQ   LLTSCO
+         LDA   ELLG
+         LDX   #ELCHR
+         BRA   LLSTLG
+LLTSCO   TST   LLCOFG
+         BEQ   LLSTLG
+         LDA   COLG
+         LDX   #COCHR
+LLSTLG   STA   LLLENG
+         STA   LLCHAR
+         STX   CHWIDTH
+         STX   XSAVE
+         CLR   LLSCHR
+         LDA   #19
+         STA   ACTION
+         RTS
+
+TESTEOL  TST   LLPGFG
+         BEQ   LLTEX
+         CMPA  #LF
+         BNE   LLTEX
+         DEC   LLCOUNT
+         BGT   LLTEX
+         LDA   LINCNT
+         STA   LLCOUNT
+         LDA   #FF
+LLTEX    RTS
+  
+RESET    TST   LLHDFG
+         BEQ   HEADERF
+         LDA   #4
+         STA   ACTION
+         LDX   #SPOOLFCB
+         STX   XSAVE
+RESRTS   RTS
+
+ 
+CLSEFILE JSR   FMSCALL
+.DELETE FILE IF EXT = ".PRT"
+         LDA   EXT,X          GET 1ST CHAR EXT
+         CMPA  #'P'
+         BNE   CLSFL2
+         LDD   EXT+1,X        GET 2ND AND 3RD CHARS EXT
+         CMPD  #$5254         ="RT"?
+         BNE   CLSFL2         NO
+         LDA   #12            DELETE FILE
+         STA   FNCODE,X       FUNCTION CODE
+         JSR   FMSCALL
+
+.        JSR   BUFINIT       CLEAR MEM BUF'S SINCE DELETE ALTERS DIR
+.
+CLSFL2   LDY   SPOOLENTRY
+         JSR   REMOVEENTRY
+         BRA   HEADERF
+
+
+
+HEADERL  LDA   ACIAS           CHECK PRINTER READY
+         BITA  #2
+         BEQ   HEADEXIT         BRANCH IF BUSY
+         LDA   ,X+
+         BZS   HEADERF
+         BSR   TESTEOL
+         STA   ACIAD           PRINT BYTE
+         STX   XSAVE
+HEADEXIT RTS
+
+HEADERF  LDB   ACTION
+         LDY   #ALIST
+         LDA   B,Y
+         STA   ACTION
+         ASLB
+         LDY   #XLIST
+         LDX   B,Y
+         STX   XSAVE
+         RTS
+
+
+.
+.
+.
+
+
+SP_ADD_ENTRY
+         LDY   #PRINTQS          LOAD ADDRESS OF PRINT QUEUE
+         LDA   ACTION
+         CMPA  #13
+         BNE   NOT13
+         CLR   ARETURN
+         BRA   TEST
+NOT13    CMPA  #12
+         BNE   TEST
+         CLR   ACTION
+TEST     LDA   STATUS,Y          SEARCH FOR AN UNUSED ENTRY
+         BZS   FILL
+         LEAY  PQES,Y       GET NEXT ENTRY
+         CMPY  #PRINTQE
+         BLO   TEST
+         SEC                 FLAGS PRINT QUEUE FULL
+         RTS
+
+
+
+FILL     LDA   #1
+         STA   STATUS,Y+
+         LDB  #PQES-1
+COPYA    LDA   ,X+                TRANSFER NEW NAME
+         STA   ,Y+
+         DECB
+         BNE   COPYA
+         CLC
+         RTS
+
+
+SP_DELETE_ENTRY
+         LDY   #PRINTQS
+         BRA   RTEST
+RETEST   PULS  X,Y
+GETNEXT  LEAY  PQES,Y        GET NEXT ENTRY
+         CMPY  #PRINTQE      IS THIS THE LAST+1
+         BLO   RTEST
+         SEC                 FLAGS PRINT QUEUE ENTRY NOT FOUNT
+         RTS
+RTEST    LDA   STATUS,Y
+         BZS   GETNEXT       BRANCH ON STATUS SET TO ZERO
+         PSHS  X,Y           SAVE POINTERS
+         LDB   #PQES-1
+         LEAY  1,Y           CHECK IF NAMES MATCH
+         LDA   ,Y+
+         ANDA  #$03
+         CMPA  ,X+
+         BNE   RETEST
+         DECB
+LOOPBA   LDA   ,X+
+         CMPA  ,Y+
+         BNE   RETEST
+         DECB
+         BZC   LOOPBA
+         PULS  X,Y
+         LDA   STATUS,Y      CHECK IF STATUS IS BUSY
+         CMPA  #1
+         BNE   REDIRECT
+
+
+
+REMOVEENTRY
+         LDA   PQES,Y
+         STA   ,Y+
+         CMPY  #(PRINTQE-PQES)
+         BNE   REMOVEENTRY
+RLOOPA   CLR   ,Y+
+         CMPY  #PRINTQE
+         BNE   RLOOPA
+         CLC                 FLAGS ENTRY REMOVED O.K.
+         RTS
+
+REDIRECT LDA   #4            REDIRECT SPOOLER TO CLOSEFILE
+         STA   ACTION
+         LDX   #SPOOLFCB
+         STX   XSAVE
+         STA   FNCODE,X
+        LBRA   CLSEFILE
+.
+.
+.
+
