@@ -2,7 +2,7 @@
 This repo holds the source code for the Poly Computer ROMs and Operating System.  It came from a collection of disks donated to us by an ex-employee of Progeni (i.e. Polycorp).  This is the original commented source code, it is not a dissassembly.
 
 
-Versions of the Operating System (POLYNET.SYS) we've seen (the 1891 typo is in the file, not my typo):
+Versions of the Server (Proteus) Operating System (POLYNET.SYS) we've seen (the 1891 typo is in the file, not my typo):
 
 * OPSYS - Version 0.2.2 - May 1891
 * OPSYS - Version 3.0.0 - Jun 1982
@@ -18,4 +18,4 @@ Versions of the BASIC interpreter we've seen:
 
 Versions of the POLY BIOS appear to be versioned by the build date.
 
-Versions of POLYSYS.SYS appear to have non-sequential version numbers - we're still trying to understand how it worked.
+Versions of POLYSYS.SYS (Poly) appear to have non-sequential version numbers - we're still trying to understand how it worked.
