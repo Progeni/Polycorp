@@ -1,0 +1,565 @@
+. PLRIT12   23 4 82    FIXED BUG ,CLOSE BUFFER IF NO COMM
+. PLRI00   19.11.81  1982 RELEASE
+
+
+
+
+
+.
+CCR1     EQU   ADLC
+CCR2     EQU   ADLC+2
+CCR3     EQU   ADLC+2
+CCR4     EQU   ADLC+6
+TXCONT   EQU   ADLC+4
+CSR1:    EQU   CCR1
+CSR2     EQU   CCR2
+RXD:     EQU   TXCONT
+.
+C1AC1    EQU   $01
+C1RIE    EQU   $02
+C1RDISC  EQU   $20
+C1RRST   EQU   $40
+C1TRST   EQU   $80
+.
+C2PSE    EQU   $01
+C2TXL    EQU   $10
+C2RCLR   EQU   $20
+C2TCLR   EQU   $40
+C2RTS    EQU   $80
+.
+C3I01    EQU   $08
+C3LOOP   EQU   $20
+C3GAP    EQU   $40
+C3LOL    EQU   $80
+.
+C4W8BIT  EQU   $1E
+C4TXAB   EQU   $20
+.
+S1RDA:   EQU   $01
+S1S2R:   EQU   $02
+S1LOOP   EQU   $04
+S1TXU    EQU   $20
+S1TDRA   EQU   $40
+.
+S2AP     EQU   $01
+S2FV     EQU   $02
+S2IDL    EQU   $04
+S2RXO    EQU   $40
+.
+SIM      EQU   $17
+XID      EQU   $BF
+XID2     EQU   $BD
+UI       EQU   $13
+UAK      EQU   $73
+UP       EQU   $33
+LGF      EQU   $1B
+
+ILLMSG   EQU   $01           ILLEGAL MESSAGE TYPE NUMBER
+NOCOMM   EQU   $02           NO COMMS ERROR
+NOMSG    EQU   $04           NO MESSAGE SENT IN REPLY BY MASTER
+.
+ERRSET   JMP   ERROR_SET
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+.    COMMS SOFTWARE INTERRUPT ROUTINES
+
+.++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+. CALLING SEQUENCE:
+.        LDX   buffer start address
+.        LDY   number of bytes to be sent
+.        LDB   message type
+.        SWI
+.        FCB   nn
+.        BCS   error (A=error code)
+.................................
+
+SEND_MSG_TO_MASTER:
+.
+         BSR   CALCEND       CALCULATE BUF END ADR
+         LDB   UB,U          GET MSG TYPE
+MTOK     BSR   SEND_MSG
+SREND    STA   UA,U          SAVE ERROR CODE
+         BNE   ERRSET
+         RTS
+.
+CALCEND  LDD   UX,U          BUF START ADR
+         TFR   D,X
+         ADDD  UY,U          ADD LENGTH TO START GIVING END
+         CMPD  #SYSTEM       WITHIN LIMITS?
+         BHS   ERRSET        NO -ERROR
+         TFR   D,Y           Y <- END ADR
+         RTS
+.
+WTRECV   CLR   RCVFLG
+         .jsr   trace         if needed
+WTRCVL   BSR   TSTCTM        TEST FOR NO COMMS
+         BNE   SMERR         COMMS FAILURE
+         LDA   RCVFLG        SET TO CNTRL WHEN FRAME RECVD
+         BEQ   WTRCVL        NOTHING YET
+         CMPA  #UP           FRAME IS A POLL?
+         RTS
+
+SMERR    LEAS  2,S           DELETE RETURN ADR
+         BRA   SMEXT         RETURN WITH ERROR CODE IN A
+.
+SEND_MSG:
+.
+. CALLING SEQUENCE:
+.        LDX   buffer start address
+.        LDY   buffer end address
+.        LDB   message type
+.        BSR   SEND_MSG
+.        BNE   error (A=error code)
+.
+.Error code = $00: OK
+.             $02: No comms
+.
+.SAVE END ADR, START ADR, TYPE
+         PSHS  Y,X,B
+         STS   SPPTR         PTR TO PARAMS FOR INT ROUTINE
+.WAIT UNTIL POLLED
+WTLOOP   BSR   WTRECV        WAIT TILL FRAME RECVD
+         BNE   WTLOOP        IGNORE ALL EXCEPT POLLS
+.POLL RECVD AND MSG SENT BY INT ROUTINE -
+.WAIT FOR ACKNOWLEDGEMENT FROM MASTER
+WTACKL   BSR   WTRECV        WAIT FOR FRAME
+         BEQ   WTACKL        POLL RECVD AND MSG RETRANSMITTED
+         ANDA  #$0F          RECV READY? (I.E. ACK)
+         CMPA  #$01
+         BNE   WTACKL        NO -CONTINUE WAITING
+.ACK RECEIVED - EXTRACT MSG NUMBER
+         LDA   CNTRL         OF ACK: RRR10001
+         LSRA;LSRA;LSRA;LSRA         0000RRR1
+         ANDA  #$0E                  0000RRR0
+.COMPARE WITH NS OF MSG SENT
+         CMPA  NS
+         BEQ   WTLOOP        MASTER WANTS SAME MSG AGAIN
+.NOT SAME -ASSUME MASTER HAS ACCEPTED MSG AND IS
+.  NOW EXPECTING NEXT
+         STA   NS            SET NS FOR NEXT MSG
+.RETURN TO CALLER
+         CLRA                NO ERRORS RECOGNISED IN THIS VERSION
+SMEXT    PULS  B,X,Y,PC      REPAIR STACK & RETURN
+
+.TEST FOR COMMS FAILURE
+TSTCTM   LDA   COMTIM        SECS SINCE LAST VALID FRAME
+         CMPA  #60           1 MIN SINCE LAST COMMS?
+         BGE   TCERR         YES
+         CLRA                NO -OK
+         RTS
+TCERR    CLRD
+         STA   COMTIM        CLEAR COMM TIMER
+         STD   BUFEND        RESET COMM BUFFER
+         CLR   BUFEND
+         LDA   #NOCOMM
+         RTS
+
+
+*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+.    RECEIVE MESSAGE
+
+
+
+. CALLING SEQUENCE:
+.        LDX   buffer start address
+.        LDY   number of bytes in buffer
+.        SWI
+.        FCB   nn
+.        BCS   error (A=error code)
+.        STY   number of bytes received
+.        STB   message type
+
+........................................................................
+
+RECV_MSG_FROM_MASTER:
+
+         BSR   CALCEND       CALCULATE BUF END ADR
+         BSR   RECV_MSG
+         STB   UB,U          MSG TYPE
+         STY   UY,U          NO OF CHARS RECVD
+         BRA   SREND         STORE ERROR & RETURN
+.
+RECV_MSG:
+.
+. CALLING SEQUENCE:
+.        LDX   buffer start address
+.        LDY   buffer end address
+.        BSR   RECV_MSG
+.        BNE   error (A=error code)
+.        STY   number of bytes recvd
+.        STB   message type
+.
+.Error code: $00: OK
+.            $02: No comms
+.            $04: No message forthcoming
+.
+.SET BUF LIMITS TO USER BUF
+         BSR   OPENBUF
+         .jsr   trace         if needed
+.WAIT FOR MESSAGE TO ARRIVE
+WTMSG    BSR   TSTCTM        TEST FOR COMMS FAILURE
+         BNE   RMEXT         NO COMMS
+         TST   MSGFLG        MSG RECVD OR ERROR?
+         BMI   WTMSG         NO
+.MESSAGE RECEIVED ...
+.RETURN TO CALLER WITH MSG SIZE AND TYPE
+         LDD   BUFP          PTR TO LAST CHAR + 1
+         SUBD  BUFST         SUBTRACT START ADR
+         TFR   D,Y           NO OF CHARS
+         LDB   TYPE          WHAT SORT OF MSG WAS IT ?
+         ANDB  #$7F          STRIP OFF POLYCORP MODE BIT
+         LDA   MSGFLG        GET ERROR CODE & SET CC
+RMEXT    RTS
+
+.OPEN COMMS BUFFER FOR LOAD MSG
+
+LOAD_INIT:
+         CLR   LOADEDFG
+         CLR   ENDLOD
+         LDD   #LOADST       START OF LOAD ROUTINE
+         STD   LOADJ         LOAD CONTINUE ADDR
+LOAD_NEXT
+         LDX   #LBUF         COMM BUF START
+         LDY   #LBUFE        COMM BUF END
+OPENBUF
+         SEI                 PREVENT COMMS INTS DURING SETUP
+         STX   BUFST         BUF START ADR
+         STX   BUFP          BUF PTR (SET IN CASE IN MIDDLE OF MSG RECV)
+         STY   BUFEND        BUF END ADR
+         LDA   #$FF
+         STA   MSGFLG        INIT TO NO MSG OR ERRORS YET
+         CLI
+         RTS
+***********************************************
+
+. SUBROUTINES
+
+TSTRT
+.START TRANSMISSION BY RESPONDING TO FRAME RECEIVED
+.SET "GO ACTIVE ON POLL" BIT IN ADLC
+         LDD   #(C1RIE+C1AC1<<8)+C3I01+C3LOOP+C3LOL+C3GAP
+         STA   CCR1          ENABLE RECV INT'S, SET GAP
+         STB   CCR2
+.SEND ADDRESS
+TSTRT1   LDA   ADDR
+. NOW TRANSMIT CHARACTER
+..........................
+. TCHR - GIVEN CHAR IN A, SEND CHAR.  X SAVED.
+TCHR
+         .traceA
+.WAIT TILL ADLC READY
+ST1      LDB   CSR1          GET STATUS REG
+         .traceB
+         BITB  #S1TDRA       TDRA?
+         BNE   TXGO          YES - SEND CHAR
+         BITB  #S1TXU        TX UNDERRUN?
+         BNE   RTS           YES -STOP XMIT
+         LDB   CSR2          SR 2
+         .traceB
+         BITB  #S2RXO        RX OVRN?
+         BEQ   ST1           NO
+         RTS                 YES -MASTER IS TRYING TO SEND SOMETHING
+.
+.TDRA NOW SET - SUPPLY CHAR
+TXGO     STA   TXCONT        CHAR TO ADLC
+RTS      RTS                 RETURN
+........................................
+.TEND - FINISH SENDING AND RESET ADLC AFTER
+. LAST CHAR
+.SET LAST-CHAR FLAG IN ADLC
+TEND     LDD   #(C1RIE<<8)+C2PSE+C2TXL
+         BSR   SETADLC2      XMIT LAST
+.TRANSMIT UNDERRUN?
+         LDA   CSR1
+         BITA  #S1TXU
+         BEQ   RTS           NO -OK
+.TX UNDERRUN -RESET TX AND PURGE FIFO
+TFIN     LDA   #C1TRST
+         STA   CCR1
+ERINT    LDA   #C1RIE
+SETCCR1  STA   CCR1          ENABLE RECV INTERRUPTS
+         RTS
++
+. IN IRQ ROUTINE **********************************************************
+.RX STATUS SERVICE ROUTINE
+RCOND:   LDA   CSR2
+         .traceA
+         BITA  #S2FV         FRAME VALID?
+         BNE   R1FV          YES
+         BITA  #S2AP         ADDRESS PRESENT?
+         BNE   AREAD         YES- READ ADDRESS
+         BITA  #S2IDL        IDLE?
+         BNE   RRESET        YES -RESET
+         BITA  #S2RXO        RECV OVERRUN?
+         BEQ   RERROR        NO -ABORT OR FCS
+         LDD   #(C1RIE+C1RDISC<<8)+C2PSE
+         BSR   SETADLC2      YES -FRAME DISCONTINUE
+
+RERROR   LDD   #(C1RIE+C1AC1<<8)+C4W8BIT+C4TXAB
+         STA   CCR1
+         STB   CCR4          ABORT TRANSMISSION ALREADY STARTED
+.
+.S.R TO RESET RX
+RRESET   LDD   #(C1RIE<<8)+C2PSE+C2RCLR
+.DROP THRU .............. TO ENABLE RECV INTS, CLEAR RX
+.
+SETADLC2 ORB   EXTEND        LOOP-BACK/EXTEND BIT
+SETADLC  STA   CCR1
+         STB   CCR2
+         RTS
+.
+RDSET    PULS  D             GET RETURN ADR
+         STD   JRD           SAVE IN DATA JUMP ADR
+         RTS                 RETURN FROM INTERRUPT CALL
+*.....................................
+. S/R TO CHECK ADDRESS
+AREAD    LDA   RXD           GET FIRST (ADDRESS) BYTE
+         .traceA
+         STA   RCVADR        RECV'D ADDR = 0 OR OWN ADDR
+         BEQ   RAD1          ADDR=0 => BROADCAST
+         CMPA  ADDR          = OWN ADDR?
+         BEQ   RAD1          YES
+.ADDR MISMATCH - FRAME DISCONTINUE
+         LDA   #C1RIE+C1RDISC
+         BRA   SETCCR1       RECV INT ENABLE, FRAME DISC
+
+.ADDR MATCH - RECV CONTROL BYTE
+RAD1
+         BSR   RDSET         RECV CHAR
+         STA   CNTRL         STORE CHAR
+         CMPA  #UP           IS THIS A POLL?
+         BEQ   POLL1         PROBABLY
+         ANDA  #$11
+         CMPA  #$10          IS THIS AN I-FRAME?
+         BEQ   IFRAME1       MAYBE (CONFIRMED ONLY WHEN FV RECVD)
+
+. RECEIVE AND STORE MESSAGE TYPE BYTE
+RTYPE    BSR   RDSET         RECV CHAR
+         STA   TYPE          STORE MSG TYPE
+         LDD   BUFST         BUF START ADR
+         STD   BUFP          SET BUF PTR
+
+.RECEIVE INFO
+         BSR   RDSET         RECV CHAR
+         LDX   BUFP          BUF PTR
+         CMPX  BUFEND        OUT OF ROOM IN RX BUFFER ?
+         BHS   RINFEX        YES- DO NOT STORE CHAR- THROW AWAY ..!*+*+## ( GASP ! )
+         STA   ,X+           STORE CHAR IN BUF
+         STX   BUFP          STORE PTR
+RINFEX   RTS
+.
+.FRAME VALID
+R1FV     BSR   RRESET        RESET RX
+         CLR   COMTIM        ZERO TIME SINCE LAST FV
+         LDA   RXD           GET LAST CHARACTER
+         .traceA
+         JSR   [JRD]         PROCESS LAST CHARACTER
+.EXAMINE CONTROL CHAR REC'D
+         LDA   CNTRL
+         BEQ   IFEND         NULL CONTROL -IGNORE THIS FRAME
+         CMPA  #UP           POLL?
+         BEQ   POLL2         YES
+         ANDA  #$11          MASK OUT NR AND NS
+         CMPA  #$10          I-FRAME?
+         BEQ   IFRAME2       YES
+         JMP   R1FV1
+
+***************************************************************
+.POLL CONTROL CHAR RECD - BEGIN SENDING RESPONSE
+POLL1    TST   RCVFLG        MSG TO BE SENT?
+         BNE   RIGNOR        NO
+.START XMIT, SEND ADDR
+         JSR   TSTRT
+.SEND CONTROL = I-FRAME
+         LDA   NR
+         ORA   NS
+         ORA   #$10
+         JSR   TCHR
+.SEND NULL FOR TIME FILL
+         CLRA
+         JSR   TCHR
+.IGNORE RECVD CHARS FOLLOWING CNTRL  
+RIGNOR   BSR   RDSET
+         RTS                 DO NOT SHORTEN.AS THIS RTS IS SIGNIFICANT!!!
+
+*......................................................
+.I-FRAME CONTROL CHAR RECVD - BEGIN XMIT OF ACK
+IFRAME1  LDB   RCVADR        BROADCAST MSG?
+         BEQ   IF10          YES -DO NOT ACK
+.START XMIT, SEND ADDR
+         JSR   TSTRT
+.BUFFER READY FOR MSG?
+         LDX   BUFEND
+         BEQ   IIGNOR        NO -ASK FOR RETRANSMIT
+.THIS MSG IS CURRENTLY EXPECTED MSG?
+         LDA   CNTRL         OF MSG RECVD: RRR1SSS0
+         LSLA;LSLA;LSLA;LSLA               SSS00000
+         CMPA  NR            RRR00000 - EXPECTED NO
+         BNE   IIGNOR        REXMIT OF EARLIER MSG
+.SEND I-FRAME CNTRL WITH NEW NR
+         ADDA  #$31          INCR NR, MAKE INTO FORM RRR10001
+SNDACK   JSR   TCHR
+.SEND NULL FOR TIME DELAY
+         CLRA
+         JSR   TCHR
+.RECV REST OF INCOMING FRAME
+IF10     BRA   RTYPE
+
+IIGNOR   NEG   RCVADR        USE AS FLAG
+         LDA   NR
+         ORA   #$11
+         BRA   SNDACK
+
+*......................................
+.FV RECVD AT END OF POLL FRAME -SEND REST OF MSG
+POLL2    TST   RCVFLG        MSG TO BE SENT?
+         BEQ   IFSEND        YES
+.NO MSG TO BE SENT - IF CURRENTLY WAITING TO RECV MSG, POLL IS 
+.   INTERPRETED AS "NO MSG COMING"
+         LDA   #NOMSG
+         STA   MSGFLG        SET FLAG TO ERROR COND
+         CLRA
+         CLRB
+         STD   BUFEND        CLOSE BUFFER
+         RTS
+.
+.MSG TO BE SENT  
+IFSEND   LDU   SPPTR         GET SAVED PARAM PTR
+.SEND MSG TYPE
+         LDA   ,U+
+         JSR   TCHR
+.4 CHARS NOW SENT - RESET GAP
+         LDD   #(C1AC1<<8)+C3I01+C3LOOP+C3LOL
+         STA   CCR1
+         STB   CCR2
+.GET BUFF START
+         LDX   ,U++
+. SEND BUFFER CONTENTS
+SNDLP    CMPX  ,U            PTR >= BUF END?
+         BHS   SNDEND        DONE !
+         LDA   ,X+           GET BYTE
+         JSR   TCHR          TRANSMIT CHARACTER
+         BRA   SNDLP         KEEP GOING TILL DONE
+.TERMINATE TRANSMISSION
+SNDEND   JSR   TEND          END OF TRANSMISSION
+.SET RCVFLG FOR BG TO EXAMINE
+         LDA   CNTRL
+IFSET    STA   RCVFLG
+IFEND    RTS
+
+*....................................................
+.FV RECVD AT END OF I-FRAME - TERMINATE XMIT OF ACK
+IFRAME2  LDB   RCVADR        BROADCAST MSG?
+         BEQ   IF21          YES -NO ACK SENT
+.SEND DUMMY FILL CHAR
+         CLRA
+         JSR   TCHR
+.4 CHARS NOW SENT - RESET GAP
+         LDD   #(C1AC1<<8)+C3I01+C3LOOP+C3LOL
+         STA   CCR1
+         STB   CCR2
+.TERMINATE TX
+         JSR   TEND
+.I-FRAME TO BE IGNORED?
+         LDB   RCVADR
+         BMI   IF30          YES
+.NO -INCR STORED NR
+         LDA   NR
+         ADDA  #$20
+         STA   NR
+.CLOSE RECV BUF
+IF21     CLRA
+         CLRB
+         STD   BUFEND
+.SET MSGFLG TO "MSG RECVD"
+         STA   MSGFLG
+         LDA   LODFLAG       WITHIN THE LOADER ?
+        LBNE   LOADER        YES- PROCESS THE MSG UNDER INTERRUPT
+IF30
+SETUPE   RTS
+*****************************************
+.LOOP SET-UP ROUTINES
+.
+.IDENTIFY CONTROL CHAR
+R1FV1    LDA   CNTRL
+         CMPA  #SIM          LOOP SET-UP REQUEST?
+         BEQ   SETUP0        YES
+         CMPA  #XID          ASSIGN ADDRESS?
+         BEQ   SETUP1        YES
+         CMPA  #XID2         ASSIGN IDENT?
+         BEQ   SETUP2A       YES
+         CMPA  #UAK          REQUEST TO EXTEND?
+         BEQ   SETUP2        YES
+         CMPA  #UI           REQUEST TO LOOP BACK?
+         BEQ   SETUP3        YES
+         CMPA  #LGF          FORCED LOGOFF ? ( START OF A BROADCAST )
+         BEQ   SETLGF        YES
+         JMP   IFSET         NO -PROBABLY RR (ACK)
+.
+.SIM RECVD (INIT FOR LOOP SET-UP)
+SETUP0   LDX   #200
+DELAY    LEAX  -1,X          DELAY TO ALLOW ECHO TO RETURN TO MASTER
+         BNE   DELAY
+.INIT NR,NS,ADDR
+         STX   NS            SET NS NR TO ZERO
+         LDA   #$FF
+         STA   ADDR
+         CLR   EXTEND
+.SET ADLC TO NON-LOOP, LOOP BACK
+         LDD   #(C1RRST+C1TRST+C1AC1<<8)+C3I01
+         JSR   SETADLC       RESET, 01 IDLE
+         LDD   #(C1RRST+C1TRST<<8)+C2PSE
+         JSR   SETADLC       RESET, LOOP BACK, NON-LOOP MODE
+         JMP   ERINT         ENABLE RECV INTERRUPTS
+.
+.XID RECVD - SET ADDR IF NOT ALREADY SET
+SETUP1   TST   ADDR
+         BGT   SETUPE        ADDRESS ALREADY DEFINED
+         LDA   TYPE
+         STA   ADDR          NEW ADDR IN TYPE BYTE OF FRAME
+.BEGIN XMIT OF INFO MSG TO MASTER
+         JSR   TSTRT1        BEGIN XMIT (NO GAP))
+.SEND UI AS CONTROL
+         LDA   #UI
+         JSR   TCHR
+.SEND FIRST BYTE OF ID
+         LDA   POLYNUMBER
+         JSR   TCHR
+.SEND CURRENT IDENTITY
+         LDA   POLYNUMBER+1
+         JSR   TCHR
+.END XMIT
+         LDD   #(C1RIE<<8)+C2PSE+C2TXL
+         JMP   SETADLC       ENABLE RECV INTS, TRANSMIT LAST, RETURN
+.
+.UAK RECVD - SET ADLC TO LOOP MODE, SWITCH TO EXTEND.
+.SETUP2   LDA   TYPE
+.         STA   IDENT         SET NEW POLY IDENTITY
+SETUP2   LDA   #C2RTS
+         STA   EXTEND        SET EXTEND FLAG
+         LDD   #(C1RIE+C1AC1<<8)+C3I01+C3LOOP+C3LOL
+         JSR   SETADLC       LOOP MODE, LOOP ON LINE
+         LDD   #(C1RIE<<8)+C2PSE+C2RTS
+         JMP   SETADLC       RTS ON (EXTEND), RETURN
+SETUP2A  LDA   TYPE
+         STA   IDENT
+         RTS
+
+.
+.UI RECVD - SWITCH TO LOOP-BACK
+SETUP3   CLR   EXTEND        CLEAR FLAG
+         LDD   #(C1RIE<<8)+C2PSE
+         JMP   SETADLC       RTS OFF (LOOP-BACK), RETURN.
+
+
+SETLGF   JSR   LOAD_INIT     Initialise loading
+         DEC   LODFLAG
+         LDB   LOGONFLG      Is user logged on ?
+         LBEQ  LOGOFF_ENTRY  Yes log user off
+         RTS
+
+

@@ -1,0 +1,662 @@
+.MCOMMP30      10/10/81      FAST COMMS
+               20/10/81      DEBUG TRACE INCLUDED
+
+.MCOMMP20      30/6/81       MSG TO FORCE LOGOFF, B/C SEND.
+
+MCOMMP04       5/6/81        SEND RETRY LIMIT INCREASED
+                           . NO LOOP SET-UP IN SPECPOL OR SEND
+.
+ADLC     EQU   $E030         P/W
+I        EQU   2             P/W
+CCR1     EQU   ADLC
+CCR2     EQU   ADLC+I
+CCR3     EQU   ADLC+I
+CCR4     EQU   ADLC+I+I+I
+TXCONT   EQU   ADLC+I+I
+CSR1     EQU   CCR1
+CSR2     EQU   CCR2
+RXD      EQU   TXCONT
+.
+C1AC1    EQU   $01
+C1RIE    EQU   $02
+C1RRST   EQU   $40
+C1TRST   EQU   $80
+.
+C2PSE    EQU   $01
+C2TXL    EQU   $10
+C2RCLR   EQU   $20
+C2TCLR   EQU   $40
+.
+C3I01    EQU   $08
+.
+C4W8BIT  EQU   $1E
+.
+S1RDA    EQU   $01
+S1S2R    EQU   $02
+S1TXU    EQU   $20
+S1TDRA   EQU   $40
+.
+S2AP     EQU   $01
+S2FV     EQU   $02
+S2IDL    EQU   $04
+S2RXO    EQU   $40
+.
+TIMER    EQU   $E020         P/W
+TIMCR1   EQU   TIMER
+TIMCR2   EQU   TIMER+1
+TIMCR3   EQU   TIMER
+TIM3     EQU   TIMER+6       P/W
+.
+ERNR     EQU   $02            NO ECHO OR RESP
+MAXADR   EQU   $01
+.
+SIM      EQU   $17
+XID      EQU   $BF
+UI       EQU   $13
+UA       EQU   $73
+UP       EQU   $33
+LGF      EQU   $1B
+.
+.
+RETRYP   FCB   50            RETRY LIMIT FOR POLL
+RETRYS   FCB   70            RETRY LIMIT FOR SEND
+LSULIM   FDB   300           RETRY LIMIT FOR LOOP SET-UP
+.
+BUFADR   FDB   0
+BUFEND   FDB   0
+BUFP     FDB   0
+ADDRD    FCB   0             DOUBLE-BYTE ADDR
+ADDR     FCB   MAXADR
+ADDRMAX  FCB   MAXADR
+POLYID   FCB   0
+TYPE     FCB   0
+CNTRL    FCB   0
+NOECHO   FCB   0
+RCVFLG   FCB   0
+ERRFLG   FCB   0
+ERRFLG2  FCB   0
+IDENT    FCB   0
+.
+NR       FDB   0,0,0,0,0,0,0,0
+NS       FDB   0,0,0,0,0,0,0,0
+.
+RBUF     RMB   1
+RBUFL    EQU   *-RBUF
+****************************************************
+.COMMINIT - INITIALISE FOR COMMUNICATIONS.
+. CALL ON POWER-UP OR RESET.
+.
+COMMINIT
+         LDB   #16
+COMMINIT1
+         LDA   #$92   P/W    T3 O/P ENABLE, E CLOCK
+         STA   TIMCR3 P/W
+         CLRA                1MHZ/2*(B+1) = 83,333 HZ
+         STD   TIM3   P/W
+.SET UP ADLC REGISTERS
+         LDD   #(C1RRST+C1TRST+C1AC1<<8)+C3I01
+         BSR   SETADLC       RESET,AC=1,01 IDLE
+         LDA   #C4W8BIT
+         STA   CCR4          8 BIT WORD
+         CLI                 ENABLE INTERRUPTS
+         LDD   #C2PSE        AC=0, PSE
+
+SETADLC  STA   CCR1
+         STB   CCR2          CCR2 OR CCR3
+LSUEND   RTS
+**************************************************
+.LOOPSU - SET UP COMMUNICATIONS LOOP.
+. CALL ON POWER UP OR WHEN LOOP FAULT DETECTED.
+.
+LOOPSU
+         LDX   LSULIM        RETRY LIMIT
+LSULP    PSHS  X             SAVE
+         BSR   LSUTRY        TRY ONE CYCLE
+         PULS  X
+         BEQ   LSUEND        SUCCESS!
+         LEAX  -1,X          NO GOOD -TRY AGAIN LSULIM TIMES
+         BNE   LSULP
+.
+.
+         RTS
+.
+LSUTRY
+.INIT ADDRESSES AND ADLC
+         CLR   ADDR          CURRENT ADDRESS
+         CLR   ADDRMAX       ADDR OF LAST POLYWOG
+         CLR   NS            FOR B/C MODE
+         BSR   COMMINIT
+.DELAY TO ALLOW POLYWOGS TO START UP
+         LDX   #600
+         JSR   DELAY
+.SEND SIM MESSAGE TO SET POLYWOGS INTO SETUP MODE
+         JSR   TSTRTNE       START XMIT (NO ECHO, NO RESP)
+         LDA   #SIM
+         JSR   TCHREND       XMIT CHAR & END XMIT
+.DELAY TO ALLOW TIME FOR POLYWOGS TO CHANGE STATE
+NXSU     LDX   #1200         9.6 MSEC
+         JSR   DELAY
+.ADVANCE TO NEXT ADDRESS
+         INC   ADDR
+.SET RESPONSE BUF PTRS
+         LDX   #RBUF         RESPONSE BUF ADR
+         LDY   #RBUFL
+         JSR   LIMSTOR       SET BUF PTRS
+.SEND XID MESSAGE (0,XID,ADDR)
+         LDA   #1
+         STA   NOECHO        NO ECHO
+         LDB   #1            RECV RESPONSE AFTER XMIT
+         CLRA                TRANSMIT ADDR = 0
+         JSR   TCOM1
+         LDA   #XID
+         JSR   TCHR          SEND XID
+         LDA   ADDR
+         BSR   TCHREND       SEND NEW ADDRESS, END XMIT
+         BNE   ENDSU         NO RESPONSE
+.CHECK RESPONSE RECEIVED
+         LDA   CNTRL         OF RESPONSE
+         CMPA  #UI           CORRECT RESPONSE?
+         BNE   LSUFAIL       NO
+.PROCESS LOG-ON DATA
+         LDX   POLYID        TWO BYTE ID
+         LDU   #IDTAB        POINT TO BEGINNING OF ID TABLE
+NXTENTRY CMPU  TABEND
+         BHS   NOTINTAB      NOT IN TABLE
+         CMPX  0,U++
+         BEQ   FOUND         FOUND THE ENTRY
+         LEAU  1,U
+         BRA   NXTENTRY      TRY NEXT ENTRY
+. NOT IN TABLE,ADD THIS ID TO END OF TABLE
+NOTINTAB STX   0,U++
+         LEAX  1,U
+         STX   TABEND        UPDATE TABLE END POINTER
+FOUND    LDA   #10
+         STA   0,U           RESET TO 1 MINUTE TIME OUT
+.CLEAR NR AND NS
+         INC   ADDRMAX       INCR MAX ADDRESS
+         LDX   ADDRD
+         CLR   NR,X
+         CLR   NS,X
+.SEND ACKNOWLEDGEMENT
+         BSR   TSTRTNE       START XMIT & SEND ADDR (NO ECHO OR RESPONSE)
+         LDA   #UA
+         JSR   TCHR
+         LDA   IDENT
+         BSR   TCHREND       SEND UA, END XMIT
+.
+         BEQ   NXSU          NEXT POLYWOG IF NO XMIT ERROR
+.
+LSUFAIL  LDA   #1            RESET Z FLAG
+         RTS
+.
+.NO RESPONSE TO XID MESSAGE - SET MAX ADDR
+ENDSU    DEC   ADDR
+         BEQ   LSUFAIL       NO POLYWOGS ON-LINE
+.SEND UI MSG TO SET LAST POLYWOG TO LOOP BACK
+         BSR   TSTRTNE       START XMIT, SEND ADDR (NO ECHO OR RESP)
+         LDA   #UI
+         BSR   TCHREND       SEND UI, END XMIT
+         BNE   LSUFAIL       XMIT ERROR
+.DELAY TO ALLOW SWITCHING
+         LDX   #600          4.8MSEC
+         BSR   DELAY
+         LDB   ADDRMAX
+         DECB
+         CMPB  #4
+         BHS   SETCLOK
+         LDB   #4
+SETCLOK  LDA   #$92
+         STA   TIMCR3
+         CLRA
+         PSHS  B
+         ASRB
+         ADDB  0,S+
+         STD   TIM3
+         CLRA
+         RTS
+.
+DELAY    LEAX  -1,X
+         BNE   DELAY
+         RTS
+.
+TCHREND  JSR   TCHR
+         JMP   TEND
+.
+TSTRTNE  LDA   #1            NOECHO <- 1
+         JMP   TSTRT1        XMIT, NO RESPONSE
+**************************************************
+.GENPOL - POLL EACH POLYWOG IN TURN.
+.
+. GIVEN X = ADDRESS OF BUFFER
+.       Y = NUMBER OF BYTES IN BUFFER
+.       ADDR = CURRENT POLYWOG ADDRESS;
+. ADVANCE ADDR TO NEXT VALID POLYWOG ADDRESS
+. AND POLL THAT POLYWOG  (ONE CYCLE ONLY).
+.
+. RETURN WITH
+.       Y = ACTUAL NUMBER OF BYTES RECEIVED
+.       B = MESSAGE TYPE
+.       ADDR = ADDRESS OF POLYWOG POLLED
+.       A = ERROR CODE: 0 = MESSAGE RECEIVED
+.                       >0 = ERROR IN LOOP
+.                       <0 = INVALID OR NO RESPONSE.
+.       CC = AS SET BY "TST ERROR-CODE".
+.
+.
+.ERROR CODE BITS:
+.0: Invalid Response Format
+.1: Timeout on echo
+.2: Idle; Timeout on response
+.3: Abort
+.4: FCS error
+.5: Tx Underrun
+.6: Rx Overrun
+.7: 1 = error applies to response, 0 = error applies to echo
+
+GENPOL
+         JSR   LIMSTOR       STORE BUF PTRS
+         INC   ADDR          NEXT POLYWOG
+         LDA   ADDR          GET ADDRESS
+         CMPA  ADDRMAX       BEYOND LAST?
+         BLS   GP1           NO
+         LDA   #1
+         STA   ADDR          YES -SET TO 01
+GP1      BRA   POLL          PERFORM POLL CYCLE AND RETURN
+*********************************
+.LOGOFFREQ - SEND MSG TO FORCE LOGOFF
+.  GIVEN A = 0: GO TO LOGON SCREEN
+.          <>0: GO TO WAIT LOOP FOR LOAD.
+
+LOGOFFREQ
+         PSHS  A             SAVE PARAM
+         LDD   #$10          PUT CLOCK BACK TO 31 KHZ
+         STD   TIM3
+         JSR   TSTRT         START XMIT, SEND ADDR
+         LDA   #LGF          SPECIAL CONTROL
+         JSR   TCHR
+         PULS  A
+         JSR   TCHREND       SEND PARAM, END XMIT, RETURN.
+         PSHS  CC
+         LDB   ADDRMAX
+         DECB
+         CMPB  #4
+         BHS   SETCLOK2
+         LDB   #4
+SETCLOK2 CLRA
+         PSHS  B
+         ASRB
+         ADDB  0,S+
+         STD   TIM3
+         PULS  CC,PC
+****************************************************
+.SPECPOL - POLL SPECIFIC POLYWOG.
+.
+. GIVEN X = ADDRESS OF BUFFER
+.       Y = NUMBER OF BYTES IN BUFFER
+.       ADDR = CURRENT POLYWOG ADDRESS
+.
+. POLL THE POLYWOG WITH THE SPECIFIED ADDRESS.
+. IF ERROR OCCURS, REPEAT POLL RETRYP TIMES, PERFORM
+.    LOOP SET-UP, REPEAT POLL RETRYP TIMES, RETURN.
+.
+. RETURN WITH
+.       Y = NUMBER OF BYTES RECEIVED
+.       B = MESSAGE TYPE
+.       A = ERROR CODE (AS FOR GENPOL)
+.       CC = AS SET BY "TST ERROR-CODE".
+.
+SPECPOL
+         JSR   LIMSTOR       STORE BUF PTRS
+         LDA   RETRYP        POLL RETRY LIMIT
+         PSHS  A             SAVE
+POLLP1   BSR   POLL          SEND POLL & RECV RESP
+         BEQ   PRET          RESPONSE RECEIVED
+         DEC   ,S            DECR RETRY COUNT
+         BNE   POLLP1        NOT YET ZERO - RETRY
+.NO RESPONSE AFTER RETRYING - ERROR RETURN
+.
+PRET     LEAS  1,S           REPAIR STACK, SAVING REG'S
+         TST   ERRFLG        SET CC
+         RTS 
+.
+SPECPOL1 JSR   LIMSTOR
+.
+POLL     JSR   TRSTRT        START XMIT & SEND ADDR
+         LDA   #UP           CONTROL = UNNUMBERED POLL
+         JSR   TCHR          XMIT
+         CLRA
+         JSR   TCHR          SEND NULL FOR TIME FILL
+         JSR   TEND          FINISH XMIT, RECV RESPONSE
+         BEQ   POL1          RESPONSE RECVD
+         BSR   SNDDUM        NO RESP - SEND DUMMY MSG
+         BNE   RETUSR        DEFINITELY NO RESPONSE (OR XMIT ERROR)
+.CHECK RESPONSE FORMAT
+POL1     LDA   CNTRL         OF MSG RECD - RRR1SSS0
+         ANDA  #$11          MASK OUT RRR AND SSS
+         CMPA  #$10          I-FRAME?
+         BNE   PSETERR       NO -IGNORE THIS MSG
+.DETERMINE NEW NR
+         LDA   CNTRL                       RRR1SSS0
+         LSLA;LSLA;LSLA;LSLA               SSS00000
+         LDB   ADDR          OF MSG SOURCE
+         LDX   #NR           ADR START OF NR'S
+         CMPA  B,X           C.F. POLYWOG'S NR (RRR00000)
+         PSHS  CC            SAVE RESULT OF COMPARISON
+         BNE   SNDACK        NOT WHAT I AM EXPECTING
+         ADDA  #$20          INCREMENT NR
+         STA   B,X           SAVE INCREMENTED VALUE
+SNDACK   BSR   ACKSEND       SEND RR FRAME TO ACK
+         PULS  CC            GET COMPARISON RESULT
+         BEQ   RETUSR        ALL OK
+PSETERR  LDA   #$81          SET ERROR FLAG TO
+         STA   ERRFLG            ENSURE THIS MSG IS IGNORED
+.
+RETUSR   LDD   BUFP          BUFFER END ADR
+         SUBD  BUFADR        CONVERT TO LGH
+         LDX   BUFADR        BUFFER START ADR
+         TFR   D,Y           NO OF BYTES RECD
+         LDB   TYPE
+         LDA   ERRFLG 
+         RTS
+
+ACKSEND  JSR   TSTRT         START XMIT, SEND ADDR
+         LDX   ADDRD
+         LDA   NR,X          GET NR FOR POLYWOG
+         ORA   #$11          RCV RDY = RRR10001
+         JSR   TCHR          SEND AS CONTROL
+         JMP   TEND          FINISH XMIT
+.
+.SEND DUMMY MESSAGE TO POLY IN CASE POLY FAILED TO
+.  GO ACTIVE ON POLL IN TIME FOR POLL OR I-FRAME END
+SNDDUM   JSR   TRSTRT        START XMIT, SEND ADDR
+         CLRA
+         JSR   TCHR          ZERO CNTRL
+         JMP   TEND
+
+*************************************************
+.SEND - SEND MESSAGE TO POLYWOG.
+.
+. GIVEN X = ADDRESS OF BUFFER TO BE SENT
+.       Y = NUMBER OF CHARACTERS TO BE SENT
+.       B = MESSAGE TYPE
+.       ADDR = ADDRESS OF POLYWOG TO WHICH MESSAGE TO BE SENT;
+.
+. SEND MESSAGE TO POLYWOG.
+. IF ERROR OCCURS,
+.   REPEAT RETRYS TIMES, RETURN.
+.
+. RETURN WITH
+.       A = ERROR CODE: 0 = MESSAGE SENT CORRECTLY
+.                       >0 = TRANSMIT ERROR
+.                       <0 = MESSAGE COULD NOT BE SENT.
+.       CC = AS SET BY "TST ERROR-CODE".
+.
+SEND
+         LEAS  -1,S          RESERVE STACK SPACE
+         PSHS  Y,X,B         SAVVE COUNT,ADR,TYPE
+SND05    LDA   RETRYS        INIT RETRY COUNT
+         STA   5,S
+SND10    CLRA
+         CLRB
+         STD   BUFEND        NO BUFFER FOR RESPONSE
+.SEND ADDRESS, CONTROL, TYPE
+         JSR   TRSTRT        START XMIT, SEND ADDR
+         LDX   ADDRD         POLYWOG ADDRESS
+         LDA   NR,X          RRR00000
+         ORA   NS,X          0000SSS0
+         ORA   #$10          RRR1SSS0
+         JSR   TCHR          XMIT
+         LDA   ,S            GET MSG TYPE
+         JSR   TCHR          XMIT
+. SEND BUFFER CONTENTS
+         LDD   3,S           GET COUNT
+         LDX   1,S           GET BUF PTR
+SNDLP    SUBD  #1            DECR COUNT
+         BLT   SNDEND        NO MORE BYTES TO SEND
+         PSHS  D             SAVE COUNT
+         LDA   ,X+           GET BYTE FROM BUF
+         JSR   TCHR          XMIT BYTE
+         PULS  D             RESTORE COUNT
+         BRA   SNDLP         LOOP
+. FINISH TRANSMIT
+SNDEND   JSR   TEND          END XMIT & RECV RESPONSE
+         BGT   SNDERR        NO ECHO - SEND MSG AGAIN
+         BEQ   SND20         RESPONSE RECVD -PROCESS
+.NO RESPONSE -IS THIS A BROADCAST?
+         LDX   ADDRD
+         BNE   SNDNR         NO -SEND DUMMY MSG
+.YES -NO RESPONSE EXPECTED
+         CLR   ERRFLG        NO ERROR TO BE RETURNED
+         BRA   SNDEN1
+.NOT A BROADCAST - SEND DUMMY MSG TO POLY
+SNDNR    BSR   SNDDUM
+         BNE   SNDERR        DEFINITELY NO RESPONSE -SEND MSG AGAIN
+
+.PROCESS ACKNOWLEDGEMENT FROM POLYWOG
+SND20    LDA   CNTRL         OF ACK FROM POLYWOG
+         ANDA  #$0F
+         CMPA  #$01          RECV READY?
+         BNE   SNDER1        NO - ERRONEOUS RESPONSE
+         LDA   CNTRL         RRR10001
+         LSRA;LSRA;LSRA;LSRA 0000RRR1
+         ANDA  #$0E          0000RRR0
+         LDX   ADDRD         INDEX INTO TABLE
+         CMPA  NS,X          NR = NS FOR POLYWOG?
+         BEQ   SNDAK1        YES - POLYWOG DID NOT RECV EARLIER ACK
+SND30    STA   NS,X          NO -STORE NEW NS
+SNDEN1   LEAS  6,S           REPAIR STACK
+         JMP   RETUSR        MSG SENT
+.
+. POLYWOG FAILED TO RECEIVE ACK SENT EARLIER -
+.  SEND ANOTHER ACK
+SNDAK1   JSR   ACKSEND
+.SET ERROR FLAG TO INDICATE CURR MSG NOT ACKED
+SNDER1   LDA   #$80
+         STA   ERRFLG
+.DELAY BETWEEN SENDs
+SNDERR
+.DECR COUNT & RETRY
+         DEC   5,S
+         BEQ   SNDEN1        ERROR EXIT IF RETRY LIM EXCEEDED
+         JMP   SND10
+****************************************************
+. SUBROUTINES
+.
+LIMSTOR  TFR   Y,D           D <- BYTE COUNT
+         STX   BUFADR        STORE BUF ADDRESS
+         ADDD  BUFADR        CALC BUF END ADR
+         STD   BUFEND        STORE
+         RTS
+................................................
+.TRSTRT - START TRANSMIT/RECEIVE.
+.TSTRT - START TRANSMIT ONLY.
+TRSTRT   CLRA                ECHO EXPECTED
+         LDX   BUFADR
+         STX   BUFP          SET BUF DATA END IN CASE OF NO DATA
+         LDB   #1            TO SET FLAG
+         BRA   TCOM
+.
+TSTRT    CLRA                ECHO EXPECTED
+TSTRT1   CLRB                TO RESET FLAG
+TCOM     STA   NOECHO
+         LDA   ADDR
+TCOM1    STB   RCVFLG        RESPONSE EXPECTED OR NOT
+         CLR   ERRFLG        ERROR INDICATOR
+         SEI                 DISABLE INTS DURING TRANSACTION
+         LDB   #C1RRST
+         STB   CCR1          RESET RECVR
+         CLR   CCR1
+         .XXXXXI
+.SUPPLY CHAR TO ADLC XMIT
+................................................
+.TCHR - CALLED TO SEND EACH CHAR.
+. GIVEN A = CHAR TO BE SENT.  X SAVED.
+TCHR
+         .XXXXXA
+.WAIT TILL ADLC READY
+ST1      LDB   CSR1          GET STATUS REG
+         .XXXXXB
+         BITB  #S1TDRA       TDRA?
+         BNE   TXGO          YES - SEND CHAR
+         BITB  #S1TXU        TX UNDERRUN?
+         BEQ   ST1           NO
+.TX UNDERRUN
+         RTS
+.
+TXGO
+         STA   TXCONT        PLACE IN XMIT FIFO
+RTS      RTS
+................................................
+.TEND - TERMINATE TRANSMISSION.
+. AND WAIT FOR "ECHO" OF TRANSMIT AROUND LOOP.
+. IF RCVFLG SET THEN WAIT FOR RESPONSE ALSO.
+. EXITS WITH X = ADR START OF BUF, D=CHAR COUNT.
+TEND     LDA   CSR1
+         .XXXXXA
+         BITA  #S1TXU        TX UNDERRUN?
+         BNE   TERR          YES
+.SET LAST-CHAR BIT IN ADLC
+         LDA   #C2PSE+C2TXL  XMIT LAST CHAR
+TEND1    STA   CCR2          TELL ADLC THIS IS LAST CHAR
+         .XXXXXA
+.ECHO EXPECTED?
+TFIN     LDA   NOECHO
+         BNE   R2STRT        NO
+.RECEIVE WHAT IS LEFT OF ECHO
+R1LOOP   LDX   #$400         TIMEOUT
+R1LP1    LDA   CSR1          STATUS REG
+         .XXXXXA
+         BITA  #S1RDA        DATA?
+         BEQ   R1S2          NO
+R1RD     LDA   RXD           YES - READ AND IGNORE
+         .XXXXXA
+         BRA   R1LOOP
+R1S2     BITA  #S1S2R        STATUS REG 2
+         BEQ   R1DEC         NO
+         LDA   CSR2
+         .XXXXXA
+         BITA  #S2AP         ADDRESS PRESENT?
+         BNE   R1RD          YES -READ & IGNORE
+         BITA  #S2IDL+S2RXO  IDLE OR RX OVERRUN?
+         BNE   R1RSET        YES -IGNORE
+         BITA  #S2FV         FRAME VALID?
+         BNE   R1FV          YES
+.ABORT OR FCS ERROR
+R1ER     ORA   ERRFLG        INCLUDE WITH OTHER ERROR BITS
+         STA   ERRFLG
+.RESET ADLC
+R1RSET   BSR   RRESET
+         BRA   R1LOOP
+
+.NO STATUS CONDITION WAITING
+R1DEC    LEAX  -1,X
+         BNE   R1LP1
+.TIMEOUT
+         LDA   #ERNR        NO ECHO
+         ORA   ERRFLG
+         STA   ERRFLG
+         JMP   RTERM1
+.
+.ERROR OCCURRED ON XMIT OR ON RECV ECHO -
+.  WAIT TILL TX FIFO EMPTY AND UNDERRUN OCCURS
+TERR     STA   ERRFLG        TX UNDERRUN
+.RESET TX
+         LDA   #C2PSE+C2TCLR
+         BRA   TEND1
+
+.RESET RX STATUS (TO ALLOW LOWER
+.  PRIORITY BITS THROUGH)
+RRESET   LDA   #C2PSE+C2RCLR
+         STA   CCR2          RESET RX
+         .XXXXXA
+         RTS
++***********************************************
+.ROUTINE TO RECV RESPONSE
+
+.FRAME VALID ON ECHO
+R1FV     LDA   RXD           READ LAST CHAR & IGNORE
+         .XXXXXA
+         TST   ERRFLG        IGNORE FV IF ERROR OCCURRED
+         BNE   R1RSET        - WAIT FOR TIMEOUT INSTEAD
+         BSR   RRESET        RESET ADLC RECV
+.RESPONSE EXPECTED?
+R2STRT   LDA   RCVFLG
+         BEQ   RTERM1        NO
+.YES - READ ADDRESS
+RADR     LDY   #RCVCHR
+         EXG   PC,Y          COROUTINE CALL TO READ CHAR
+         CMPA  ADDR          FROM CORRECT SLAVE?
+         BEQ   RADR1         YES
+         LDA   #$81          NO -SET ERROR
+         STA   ERRFLG
+         BRA   R1LOOP        IGNORE REMAINING CHARS
+
+RADR1    LDX   BUFADR
+.READ CONTROL BYTE
+RCONT    EXG   PC,Y          READ CHAR
+         STA   CNTRL         CONTROL BYTE
+.
+.IGNORE DUMMY BYTE, OR  READ IN FIRST BYTE OF POLY ID IN LOOP SETUP
+         EXG   PC,Y
+         STA   POLYID
+
+.READ MESSAGE TYPE
+RTYPE    EXG   PC,Y          READ CHAR
+         STA   TYPE
+.
+.ROUTINE TO READ AND STORE CHARS
+RINFO    EXG   PC,Y          READ CHAR
+         CMPX  BUFEND        BEYOND BUFFER END?
+         BHS   RINFO         YES - IGNORE BYTE
+         STA   ,X+           STORE CHAR
+         BRA   RINFO
+
+.COROUTINE TO READ CHARS & DETECT STATUS CONDITIONS
+
+RCVCHR
+R2LOOP   LDB   #$FF          INIT TIMEOUT COUNT
+R2DEC    DECB                DECR TIMEOUT COUNT
+         BEQ   R2I1          TIMEOUT - NO RESPONSE
+         LDA   CSR1
+         .XXXXXA
+         BITA  #S1RDA        DATA AVAIL?
+         BEQ   R2S2          NO
+R2RD     LDA   RXD           READ DATA BYTE
+         .XXXXXA
+         EXG   PC,Y          COROUTINE CALL TO PROCESS
+         BRA   R2LOOP        CONTINUE
+
+R2S2     BITA  #S1S2R        S2 REQ?
+         BEQ   R2DEC         NO
+         LDA   CSR2          STATUS REG 2
+         .XXXXXA
+         BITA  #S2AP         ADDRESS PRESENT?
+         BNE   R2RD          YES
+         BITA  #S2IDL        IDLE?
+         BNE   R2IDLE        YES
+         BITA  #S2FV         FRAME VALID?
+         BNE   R2FV          YES
+         ORA   #$80          INDICATE ERR ON RECV RESP
+         JMP   R1ER          ABORT, FCS ERR, OVERRUN
+
+.RX IDLE
+R2IDLE   TST   NOECHO
+         BEQ   R2I1
+         BSR   RRESET
+         BRA   R2LOOP
+
+R2I1     ORA   #$80          SET SIGN BIT IF ERROR ON RESPONSE
+         STA   ERRFLG        SET ERROR
+RTERM    BSR   RRESET        TERMINATE RECV
+RTERM1   CLI                 RE-ENABLE INTS
+         LDA   ERRFLG
+         BEQ   RTERM2        NO ERRORS
+         STA   ERRFLG2       FOR DEBUGGING
+RTERM2   RTS
+
+.FRAME VALID
+R2FV     LDA   RXD           GET LAST CHAR
+         .XXXXXA
+         EXG   PC,Y          PROCESS LAST CHAR
+         STX   BUFP          SAVE BUF PTR
+         BRA   RTERM

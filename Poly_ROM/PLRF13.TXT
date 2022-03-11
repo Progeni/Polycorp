@@ -1,0 +1,672 @@
+
+*************************************************************************
+
+. NAME    :    LINE_EDIT
+. FUNCTION:    Check the input character and do the appropriate 
+.              line edit functions
+. ON ENTRY:    On initialise
+.              X start of buffer where the input line to be put
+.              Y maximum buffer length
+.              U stack mark pointer
+. ON EXIT :    At end of edit
+.              X start of buffer where the input line has been placed
+.              Y actual buffer length
+. DESTROYS:    NIL
+. DESCRIPTION: This is a line edit routine to be used by editor
+.              or other programs to input a line from the keyboard.  The
+.              edit must be initialised and ended with typing ENTER
+        
+         PROC
+LINE_EDIT:
+         LDA   UB,U          Get the input character
+         BEQ   EDIT1
+         CMPA  #SO           Is it shift out?
+         BEQ   EDIT1
+         TST   TTXTF,Y
+.                            Branch if a printable character.
+         BNE   LLPRINTCHAR
+         CMPA  #LINIT       Is it to initialise?
+         BEQ   INITIALISE    Yes then initialise.
+         BHI   LLPRINTCHAR
+         CMPA  #CDOWN
+         BEQ   CURSOR_DOWN   Move cursor down one position.
+         CMPA  #CUP
+         BEQ   CURSOR_UP     Move cursor up one position.
+         CMPA  #SCRUP
+         BEQ   SCROLL_UP
+         CMPA  #SCRDN
+         BEQ   SCROLL_DOWN
+         JSR   RESTORE       RESTORE CURSOR IF NECESSARY
+         LDA   UB,U          Restore A
+         CMPA  #CR           Is it ENTER?
+        LBEQ   EDITEND       Branch to edit end.
+         CMPA  #FF           Formfeed
+        LBEQ   CLRSCRN       Clear the screen
+         CMPA  #LINSERT      LINE INSERT
+        LBEQ   LINE_INSERT
+         CMPA  #LDELETE      LINE DELETE
+        LBEQ   LINE_DELETE
+         CMPA  #CINSKEY
+        LBEQ   INSERT_CHAR   Insert character.
+         CMPA  #CDELKEY
+        LBEQ   DELETE_CHAR   Delete character.
+         CMPA  #CLFKEY
+        LBEQ   CURSOR_LEFT
+         CMPA  #CRTKEY
+        LBEQ   CURSOR_RIGHT
+EDIT1
+         JMP   CHROUT
+LLPRINTCHAR
+         JMP   PRINTABLE_CHAR
+
+*************************************************************************
+
+. NAME    :                  INITIALISE
+. FUNCTION:                  Initialise the line editor.
+. ON ENTRY:                  U stack mark pointer
+. ON EXIT :                  B UB,U = error no if error.
+.                            CC C UCC,U = 1 if error.
+. DESTROYS:                  A,B,X,Y
+. DESCRIPTION:               Initialise the line editor, the UX register has
+.                            the start address of buffer, UY register
+.                            has the maximum length for the line input.
+INITIALISE
+         LDA   UA,U
+         STA   EDITFLG
+         LDD   UX,U          Load start of buffer.
+         LDY   UY,U          Load maximum buffer length.
+         BEQ   LLERRSET      Y cannot be zero length
+         LEAX  D,Y           Add to start of buffer.
+         CMPX  #SYSTEM       Check against the system memory.
+         BHS   LLERRSET      Branch if error occurred.
+         STD   LINEBUFF      Store the start address of buffer.
+         LEAY  -1,Y          Subtract 1 from maximum length
+         STY   MAXBUFFLEN    because the last character is CR.
+         JSR   CURRCUR       Y points to current vars ,X contains physical cursor position
+         LDD   CURSOR,Y      Get current cursor position
+         STD   IBUFCUR       Make it start of buffer
+         BRA   DETN2         Now find the end of buffer
+LLERRSET JMP   ERROR_SET
+
+*************************************************************************
+
+. NAME    :    CURSOR_UP
+. FUNCTION:    To move cursor up one position.
+. ON ENTRY:    Y points to current screen variables.
+.              U stack mark pointer.
+. ON EXIT :    None
+. CALLS   :    DET_NEW_BUF,CHROUT
+. DESTROYS:    A,B,X
+. DESCRIPTION: This subroutine moves the cursor up one position
+.              and determines the new buffer area.
+CURSOR_UP
+         LDB   VERT,Y
+         CMPB  TOP,Y
+         BLS   SCROLL_DOWN
+         BRA   CURDN1        OUTPUT CHARACTER AND DET NEW BUFFER AREA
+
+*************************************************************************
+
+. NAME    :    CURSOR_DOWN
+. FUNCTION:    To move cursor down one position.
+. ON ENTRY:    Y points to current screen variables.
+.              U stack mark pointer.
+. ON EXIT :    None
+. CALLS   :    DET_NEW_BUF, CHROUT
+. DESTROYS:    A,B,X
+. DESCRIPTION: This subroutine moves the cursor down one position
+.              and determines the new buffer area.
+CURSOR_DOWN
+         LDB   VERT,Y
+         CMPB  BOTTOM,Y
+         BPL   SCROLL_UP
+CURDN1
+         JSR   CHROUT        Use the output char routine to move cursor down.
+         BRA   DET_NEW_BUF
+.
+*********************************************************************
+.
+. NAME    :  SCROLL_UP
+. FUNCTION:  Scroll the screen one line up.
+. ON ENTRY:  Y points to current screen variables.
+. ON EXIT :  UCC contains the scroll information.
+. CALLS   :  SUSAVE, SUP, DET_NEW_BUF
+. DESTROYS:  A,B,X
+. DESCRIPTION: This is a scroll up function.  Before scroll, the
+.              top line is saved and the UCC is set as output parameter.
+.
+SCROLL_UP
+         JSR   SUP           Scroll up.
+         BRA   DET_NEW_BUF   Determines new buffer area.
+.
+*********************************************************************
+.
+. NAME    :  SCROLL_DOWN
+. FUNCTION:  Scroll the screen one physical line down.
+. ON ENTRY:  Y points to current screen variables.
+. ON EXIT :  UCC contains the scroll information.
+. CALLS   :  SDSAVE, SDOWN, DET_NEW_BUFF
+. DESTROYS:  A,B,X
+. DESCRIPTION:  This is a scroll down editing function, before
+.               scrolling is done the bottom line is saved.  The
+.               user CC is set as output parameter.
+.
+SCROLL_DOWN
+         JSR   SDOWN         Scroll down.
+SCROD1
+.      DROP DOWN TO DET NEW BUF TO DETERMINE NEW BUFFER AREA
+
+*************************************************************************
+
+. NAME    :    DET_NEW_BUF
+. FUNCTION:    To determine new buffer area.
+. ON ENTRY:    Y points to current screen variables.
+.              U Stack mark pointer.
+. ON EXIT :    Nothing to return.
+. CALLS   :    INCCUR, DECCUR
+. DESTROYS:    A,B,X
+. DESCRIPTION: This routine is used by CURSOR_UP and CURSOR_DOWN
+.              to determine the new buffer area.
+DET_NEW_BUF
+         JSR   REALCUR       Get cursor physical address
+         LDD   CURSOR,Y      D contains the cursor position
+         TST   0,X           Test the character.
+         BNE   DETN6         Branch if current cursor is on valid character.
+. Cursor landed on a null character, search left to find
+. end buffer.
+DETN4    CMPX  BEGINS,Y      Is it the BEGINS of screen.
+         BLS   DETN7         Branch if yes.
+         TST   0,-X          Test the character.
+         BNE   DETN4A        Branch if end of buffer found.
+         TSTB                Is the Horz cursor at start of physical line?
+         BEQ   DETN7         Branch if yes.
+         BSR   DECCUR        Move cursor 1 position left.
+         BRA   DETN4         Try again to find end of buffer.
+DETN4A   LEAX  1,X           Adjust  X ,so that both D and X now points to same place
+. SEARCH LEFT TO FIND BEGINNING OF BUFFER
+DETN6    CMPX  BEGINS,Y      Is it the BEGINS of screen?
+         BLS   DETN7         Branch if yes.
+         TST   0,-X          Test previous character.
+         BEQ   DETN6A        Branch if NUL is at the start of buffer.
+         BSR   DECCUR        Move cursor one position left.
+         BRA   DETN6         Try again.
+DETN6A   INX                 Adjust X to line up with cursor
+DETN7    STD   IBUFCUR       Store the start of buffer
+
+DETN2    CMPX  ENDS,Y        Is the cursor at the ENDS of screen?
+         BHS   DETN3         Branch if yes.
+         TST   0,X+          Otherwise test the next character.
+         BEQ   DETN3         Branch if next character is NUL.
+         BSR   INCCUR        Otherwise move cursor one position right.
+         BRA   DETN2         Try again.
+DETN3    STD   ENDL_CUR      Store as end of line buffer position.
+ 
+********************************************************************
+
+. NAME   :     DETLENGTH
+. FUNCTION:    To determine new buffer length.
+. ON ENTRY:    Y points to current screen variables.
+.              U stack mark pointer.
+. DESTROYS:    A,B,X
+. DESCRIPTION: Based on beginning of buffer(IBUFCUR) and end of buffer
+.              (ENDL_CUR) to find current buffer length.
+DETLENGTH
+         LDD   IBUFCUR       Load start of buffer
+         JSR   REALPOS
+         PSHS  X             Save IBUFCUR position on stack
+         LDD   ENDL_CUR      Load end of buffer.
+         JSR   REALPOS       Get end of buffer position
+         SUBD  0,S++         Get length of buffer
+         TST   0,X           Is the last char of buffer a NUL ?
+         BEQ   DETRETURN
+         ADDD  #1            Otherwise length=length + 1
+DETRETURN
+         STD   CURBUFFLEN    Store at current buffer length pointer.
+         RTS                 Return.
+
+*************************************************************************
+
+. NAME    :    INCCUR, DECCUR
+. FUNCTION:    Increment cursor one position, decrement cursor one position.
+. ON ENTRY:    D contains the cursor.
+. ON EXIT :    D contains the updated cursor.
+. CALLS   :    Nothing
+. DESTROYS:    A,B
+. DESCRIPTION: Move the cursor one position right or left.
+INCCUR
+         INCB                Increment Horz cursor.
+         CMPB  #40           Is horz past end of line?
+         BNE   INC1          Branch if not.
+         CLRB                Yes clear Horz cursor.
+         INCA                Increment vert cursor.
+INC1     RTS
+DECCUR
+         TSTB                Is Horz zero?
+         BNE   DEC1          Branch if not.
+         LDB   #40           Load immediate 40.
+         DECA                Decrement vert cursor.
+DEC1     DECB                Decrement Horz cursor.
+         RTS
+
+*************************************************************************
+
+ .NAME    :    CURSOR_LEFT
+ .FUNCTION:    Move the cursor left one position
+ .ON ENTRY:    Y points to current screen variables
+ .             U stack mark pointer
+. ON EXIT :    None
+. CALLS   :    None
+. DESTROYS:    A,B
+. DESCRIPTION: The cursor is moved left one position if it does not
+.              pass the beginning buffer pointer (IBUFSUR)
+CURSOR_LEFT
+         LDD   CURSOR,Y      Load current cursor
+         BSR   DECCUR        Decrement the cursor.
+         CMPD  IBUFCUR       Compare with beginning of buffer
+         BLT   CURLEXIT      Branch if past the beginning of buffer
+         STD   CURSOR,Y      Store as new cursor
+CURLEXIT RTS                 Return
+
+*************************************************************************
+
+. NAME    :    CURSOR_RIGHT
+. FUNCTION:    Move the cursor right one position
+. ON ENTRY:    Y points to current screen variables
+.              U stack mark pointer
+. ON EXIT :    None
+. CALLS   :    None
+. DESTROYS:    A,B
+. DESCRIPTION: The cursor is moved right one position if it does
+.              not pass the end of buffer pointer (ENDL_CUR)
+CURSOR_RIGHT
+         LDD   CURSOR,Y      Load current cursor
+         CMPD  ENDL_CUR      Is it the end of line buffer?
+         BHS   CURREXIT      Yes, branch - cannot move right past end of line buffer
+         BSR   INCCUR        Increment the cursor.
+         STD   CURSOR,Y      Store as new cursor position
+CURREXIT RTS                 Return
+
+*************************************************************************
+
+. NAME    :    DELETE_CHAR
+. FUNCTION:    Delete one character from current cursor position
+. ON ENTRY:    Y current screen variables
+.              U stack mark pointer
+. CALLS   :    REALPOS, REALCUR
+. DESTROYS:    A,B,X
+. DESCRIPTION: Delete one character from current cursor position.
+.              No scrolling, and current buffer length = current buffer length -1.
+DELETE_CHAR
+         LDD   ENDL_CUR      Load end of line buffer pointer
+         CMPD  CURSOR,Y      Compare with current cursor position.
+         BLS   DELCEXIT      Branch if character to delete.
+         CMPD  IBUFCUR       Compare with beginning of buffer
+         BEQ   DELCEXIT      Branch if no character to delete
+         JSR   REALPOS       Calculate end of buffer position
+         PSHS  X             Save it on stack
+         JSR   REALCUR       Calculate physical position of cursor
+         CMPX  ENDS,Y        Check with of ENDS of physical screen.
+         BLO   DELCH1        Branch if not the ENDS
+         CLR   0,X           Otherwise clear the current cursor character.
+         BRA   DELCH2        Get ready to return.
+DELCH1   LDA   1,X           Get one character
+         STA   ,X+           Store one character
+         CMPX  0,S           Is it the End?
+         BLO   DELCH1        No then branch
+         LDD   ENDL_CUR      Load the end of buffer pointer.
+         BSR   DECCUR        Decrement it.
+         STD   ENDL_CUR      Store it.
+DELCH2
+         LEAS  2,S           Restore stack
+         LDX   CURBUFFLEN    Minus 1 from current buffer length
+         LEAX  -1,X
+         STX   CURBUFFLEN
+DELCEXIT RTS                 Return
+
+*************************************************************************
+
+. NAME    :    INSERT_CHAR
+. FUNCTION:    To insert a space at the current cursor position
+. ON ENTRY:    Y points to current screen variables
+.              U stack mark pointer
+. ON EXIT :    None
+. DESTROYS:    A,B,X
+. DESCRIPTION: There are four cases to be considered.
+.              1) Current buffer exceed max buffer length, last character in 
+.                 buffer is pushed off.
+.              2) Normal insert char
+.              3) Need to extend a new physical line due to inserting an extra
+.                 char (scroll down).
+.              4) Need to extend a new physical line but at end of physical
+.                 screen, so need to scroll up.
+INSERT_CHAR
+         LDX   CURBUFFLEN    Load current buffer length count
+         CMPX  MAXBUFFLEN    Compare with the allowed maximum length
+         BHS   INSCH4        Branch if current length >=  maximum length
+         LDD   ENDL_CUR      Otherwise load end line cursor position
+         CMPB  #39           Is it at end of physical line on screen
+         BLO   INSCH6        Branch if not
+         CMPA  BOTTOM,Y      Otherwise we need to scroll
+         BPL   INSCH1        Branch if need to scroll upward
+         CLRB                Otherwise scroll down
+         INCA
+         STD   ENDL_CUR      Store new end line cursor position
+         JSR   REALPOS       Get the physical screen position
+         LDD   BEGINS,Y      Only scroll down the lines below
+         PSHS  D             the current cursor position, so save BEGINS
+         STX   BEGINS,Y      Store new BEGINS, get ready to scroll
+         JSR   SDOWN         Scroll down
+         PULS  D             Get back BEGINS
+         STD   BEGINS,Y      Restore it back
+         BRA   INSCH2        Now ready to insert char
+.The current buffer has the maximum length so the 
+.last character in buffer is shifted out.
+INSCH4
+         JSR   REALCUR       Get current cursor position and
+         PSHS  X
+         LDD   ENDL_CUR
+         JSR   REALPOS
+         CMPX  0,S
+         BEQ   INSEX1
+         LEAX  -1,X
+         BRA   INSCH3
+INSCH1
+         TST   ENDS,Y        Test the last character on screen.
+         BEQ   INSCH2        Overwrite the last character on screen.
+         JSR   SUP           Scroll up
+         LDB   TOP,Y         Correct all buffer pointers
+         CMPB  VERT,Y        Compare with vert cursor
+         BEQ   INSKIP        Skip if VERT already at the top
+         DEC   VERT,Y        Otherwise decrement VERT by 1
+INSKIP   CMPB  IBUFSV        Check whether IBUFCUR is off the screen
+         BEQ   INSKIP1       Branch if IBUFCUR already at TOP of screen
+         DEC   IBUFSV        Otherwise decrement start buffer pointer
+         BRA   INSKIP2
+INSKIP1  LDX   CURBUFFLEN    GET THE CURRENT BUFFER LENGTH
+         LEAX  -40,X         DECREMENT BY 40
+         STX   CURBUFFLEN
+INSKIP2  LDB   #-1
+INSCH6   INCB
+         STB   ENDL_HORZ     Store new end of line Horz cursor
+INSCH2
+         JSR   REALCUR       Get current cursor position and physical position
+         PSHS  X             Save it on Stack.
+         LDD   ENDL_CUR      Load end of line buffer pointer.
+         JSR   REALPOS       Get the physical position and
+INSCH3   CMPX  0,S           Is it the current cursor position?
+         BLS   INSCH5        Branch if yes
+         LDA   0,-X          Get one character.
+         STA   1,X           Store one character
+         BRA   INSCH3        Branch if not finished.
+INSCH5   LDA   #SPACE        Load a space.
+         STA   ,X            and put it in the current cursor position
+         LDD   CURBUFFLEN    Increment buffer length if necessary.
+         CMPD  MAXBUFFLEN
+         BEQ   INSEX1
+         ADDD  #$01
+         STD   CURBUFFLEN
+INSEX1   LEAS  2,S           Restore stack
+INSEXIT  RTS
+*************************************************************************
+
+. NAME    :    PRINTABLE_CHAR
+. FUNCTION:    Print a printable teletext character onto screen
+. ON ENTRY:    Y points to current screen variables
+.              U stack mark pointer
+. CALLS   :    PRINTIT,INSERT_CHAR
+. DESTROYS:    A,B,X,Y
+. DESCRIPTION: Print a printable teletext character at the current
+.              cursor position and move the cursor one position right.
+PRINTABLE_CHAR
+         BSR   RESTORE       Restore the cursor to end of buffer if necessary.
+         LDD   CURSOR,Y      Get current cursor
+         CMPD  ENDL_CUR      Compare with end of buffer cursor
+         BLO   PRINTC1       Branch if this character overwrite another
+.                            character in buffer
+         LDD   CURBUFFLEN    Load current buffer length.
+         CMPD  MAXBUFFLEN    Check against maximum buffer length
+         BLO   PRINTC2       Branch if not maximum
+         JSR   REALCUR       Otherwise calculate current cursor position
+         CMPX  BEGINS,Y      Safety check with BEGINS
+         BLS   PR_EXIT       Branch if current cursor at the BEGINS
+         LDB   UB,U          Otherwise change the last character
+         STB   0,-X          Printed to the new character
+         BRA   PR_EXIT       Normal exit
+PRINTC2
+         JSR   INSERT_CHAR   Otherwise insert a space
+PRINTC1
+         LDA   UB,U          Load input character.
+         BSR   CHAROUT       Print it out
+         LDD   CURSOR,Y      and move the current cursor
+         JSR   INCCUR        position forward.
+         STD   CURSOR,Y
+PR_EXIT  RTS                 Exit
+
+.
+*********************************************************************
+.
+. NAME    :    RESTORE
+. FUNCTION:    Restore the cursor to end of buffer if necessary.
+. ON ENTRY:
+. ON EXIT :    D = ENDL_CUR, X = MAX BUFFLEN
+. CALLS   :    REALPOS
+. DESTROYS:    A,B,X
+. DESCRIPTION: First check if the cursor is beyond the end of buffer.
+.              If so move the cursor back to end of buffer.  Then check
+.              whether the buffer has exceeded the maximum buffer
+.              length. If so clear out the extra character and restore
+.              the cursor to end of buffer.
+.
+RESTORE
+         LDD   ENDL_CUR
+         CMPD  CURSOR,Y      Compare with current cursor.
+         BHS   RESTORE3      Branch if current cursor is beyond the end of buffer.
+         STD   CURSOR,Y      Move the cursor to end of buffer.
+RESTORE3
+         LDX   MAXBUFFLEN    Load maximum buffer length.
+         CMPX  CURBUFFLEN    Compare with curret buffer length.
+         BHS   RESTEXIT      Branch if current < = maximum
+         LDD   IBUFCUR       Load the beginning buffer pointer.
+         JSR   REALPOS       Get physical position.
+         ADDD  MAXBUFFLEN    Add maximum buffer length to it.
+         PSHS  D
+         LDD   ENDL_CUR      Clear the rest of buffer to NULL.
+         JSR   REALPOS
+         LDD   ENDL_CUR
+         CLR   0,X
+RESTORE5
+         CMPX  0,S           This is the clear up loop.
+         BLS   RESTORE6
+         CLR   0,-X
+         JSR   DECCUR
+         BRA   RESTORE5
+RESTORE6
+         LEAS  2,S           Restore Stack.
+         STD   ENDL_CUR      Store the end buffer pointer.
+         STD   CURSOR,Y      Same for the cursor.
+         LDX   MAXBUFFLEN    Set buffer length to maximum
+         STX   CURBUFFLEN
+RESTEXIT
+         RTS
+.
+*********************************************************************
+.
+. NAME    :  CHAROUT
+. FUNCTION:  To print a character onto screen.
+. ON ENTRY:  B = input character.
+. CALLS   :  REALCUR
+. DESTROYS:  A,B,X
+. DESCRIPTION: Register A contains the input character.
+.              Calculate the current cursor position and check
+.              the inverse flag, then store the character at
+.              current cursor position.
+CHAROUT:
+         PSHS  A             Save on Stack.
+         JSR   REALCUR       Get physical current cursor address.
+         PULS  A             Get back input character.
+         TST   INVF,Y        Test the inverse flag.
+         BEQ   CHAR1         Branch if not set.
+         ORA   #%10000000    Otherwise inverse the character.
+CHAR1    STA   ,X            Print it.
+         RTS                 Exit
+
+********************************************************************
+
+. NAME    :  LINE_INSERT
+. FUNCTION:
+. ON ENTRY:  Y points to current screen variables.
+. ON EXIT :  UCC contains scroll information.
+. CALLS   :  REALPOS, SDOWN
+. DESTROYS:  A,B,X
+. DESCRIPTION: This function inserts a new logical line from
+.              current logical line, cursor is moved to the
+.              beginning of new logical line.
+
+LINE_INSERT
+        LDD   IBUFCUR       Load beginning buffer pointer.
+        STD   CURSOR,Y      Store as new cursor position.
+        LDX   BEGINS,Y      Load screen BEGINS.
+        PSHS  X             Save it.
+        JSR   REALPOS       Calculate begin buffer physical address.
+        STX   BEGINS,Y      Store as screen BEGINS.
+        JSR   SDOWN         Scroll down.
+        PULS  D             Restore BEGINS of screen.
+        STD   BEGINS,Y
+        LBRA  DET_NEW_BUF
+
+********************************************************************
+
+. NAME    :  LINE_DELETE
+. FUNCTION:  To delete one logical line.
+. ON ENTRY:  Y points to current variables.
+. ON EXIT :  UCC = contains scroll info  A = No. of lines deleted.
+. CALLS   :  REALPOS, SUP, DET_NEW_BUF
+. DESTROYS:  A,B,X
+. DESCRIPTION:  This function deletes current logical line and moves
+.               the cursor to the beginning of new buffer area.
+
+LINE_DELETE
+        LDD   ENDL_CUR      Load end of buffer pointer.
+        SUBA  IBUFSV        Subtract to get the number of physical
+.                           lines to be deleted.
+        INCA
+        STA   UA,U          Store in user A register as output parameter.
+        LDX   BEGINS,Y      Get screen BEGINS.
+        PSHS  A,X           Save it.
+        LDD   IBUFCUR       Get beginning of line buffer pointer.
+        STD   CURSOR,Y      Store as new cursor position.
+        JSR   REALPOS       Get physical screen position.
+        STX   BEGINS,Y      Store as start of scroll address.
+        LDA   #%00000010    Set the user CC register.
+        ORA   UCC,U         At least one physical has been deleted
+        STA   UCC,U         and bottom line(s) to be filled.
+LINED1  JSR   SUP           Scroll up.
+        DEC   0,S           Decrement line count.
+        BNE   LINED1        Branch if not finished.
+        PULS  A,X
+        STX   BEGINS,Y      Restore BEGINS of screen.
+        JMP   DET_NEW_BUF   Determines new buffer area.
+
+*********************************************************************
+.
+.. NAME    :   SDSAVE, SUSAVE
+.. FUNCTION:   Copy 40 characters to the line buffer.
+.. ON ENTRY:   No input parameter.
+.. ON EXIT :   No output parameter.
+.. CALLS   :   REALPOS
+.. DESTROYS:   A,B,X
+.. DESCRIPTION:  Due to scrolling, either the top or bottom line is
+..               off the screen, so before scroll is done, save the
+..               line into the buffer.
+.
+.SDSAVE
+.        LDA   BOTTOM,Y      Scroll down, so copy bottom line to buffer.
+.        BRA   SAVE
+.
+.
+.SUSAVE
+.        LDA   TOP,Y         Scroll up, so copy top line to buffer.
+.
+.
+.SAVE
+.        CLRB                Start of physical line.
+.        JSR   REALPOS       Get physical address.
+.        LDB   #39           Copy forty characters.
+.        CLRA
+.        CMPD  MAXBUFFLEN    Is max buff length 539 characters?
+.        BHI   SAVEXIT       Branch if true, do not copy.
+.        PSHS  Y             Save Y.
+.        LDY   LINEBUFF      Line buffer address.
+.SAVE1
+.        LDA   0,X+          Get one character.
+.        STA   0,Y+          Store it.
+.        DECB                Decrement counter.
+.        BGE   SAVE1         Branch if not finished.
+.        PULS  Y,PC          Restore Y AND RETURN
+
+
+
+*************************************************************************
+
+. NAME    :    CLRSCRN
+. FUNCTION:    To clear the current screen and put the cursor to home position.
+. ON ENTRY:    Y points to current screen variable.
+.              U stack mark pointer.
+. ON EXIT :    Cursor is in the home position.
+. DESTROYS:    A,B,X
+. DESCRIPTION: To clear the current screen and cursor to home position.
+.              The clearing of screen is done by the character out routine.
+
+
+CLRSCRN
+         JSR   CLRSCN        Go to character out routine to clear screen.
+         STD   IBUFCUR       Clear IBUFCUR
+         STD   ENDL_CUR      Clear ENDL_CUR so that they are the same
+.                            as cursor position.
+         CLRD
+         STD   CURBUFFLEN    Clear the current buffer length.
+SAVEXIT  RTS                 Exit.
+*************************************************************************
+
+. NAME    :    EDITEND
+. FUNCTION:    Line edit ending routine.
+. ON ENTRY:    U stack mark pointer.
+. ON EXIT :    UX,U = start address of line buffer.
+.              UY,U = length of buffer.
+. CALLS   :    REALPOS
+. DESTROYS:    A,B,X,Y
+. DESCRIPTION: At the end of line edit, the buffer on the current
+.              screen is transferred to the address specified by user on
+.              initialise of line editor.
+EDITEND
+         TST   EDITFLG
+         BNE   EDITEN1
+         LDD   CURSOR,Y
+         STD   ENDL_CUR
+         JSR   DETLENGTH
+EDITEN1  LDD   ENDL_CUR      Get end of line buffer position.
+         STD   CURSOR,Y      RESTORE CURSOR TO END OF LOGICAL LINE
+         CLR   HORZ,Y        Put the cursor to start of physical line
+EDITEN2  JSR   REALPOS       Calculate the physical position.
+         PSHS  X             Save it on stack.
+         LDD   IBUFCUR       Get the start of line buffer point.
+         JSR   REALPOS       Calculate the physical position.
+         LDY   LINEBUFF      Get the distination buffer address.
+NEXT_CHAR
+         CMPX  0,S           Is it the end of transfer?
+         BHI   NO_MORE_CHAR  Branch if true.
+         LDA   0,X+          Load next character
+         STA   0,Y+          Store it in buffer.
+         BRA   NEXT_CHAR     Go on to next char.
+NO_MORE_CHAR
+         LEAS  2,S           Restore stack.
+         LDA   #CR
+         STA   0,-Y          Put a CR at the end of buffer.
+         LDD   LINEBUFF      Load the start address of buffer.
+         STD   UX,U          Store at user X register.
+         LDX   CURBUFFLEN    Load the length of input line.
+         LEAX  1,X           Add 1 because we added a CR at the end of buffer.
+         STX   UY,U          Store at user Y register.
+         RTS
+*************************************************************************
+         END                 END OF LINE EDIT PROCEDURE

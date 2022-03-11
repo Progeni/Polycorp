@@ -1,0 +1,203 @@
+BUREC    LDX   FCBCADR
+         LDA   $17,X
+         BEQ   ERA18
+         LDD   $20,X
+         SUBD  #$01
+         BPL   LDCF9
+         JMP   ERR24
+
+LDCF9    STD   $20,X
+ 
+POSNRN   JSR   LDAB1
+         BCS   LDD0F
+         RORA
+         BCC   ERA18
+        LBSR   CHECKLOCK
+         BCS   LDD0F
+         LDX   FCBCADR
+         CLR   $00,X
+         LDA   $17,X
+         BNE   LDD10
+ERA18    LDB   #$12          SYSTEM FILE STATUS ERROR
+         ORCC  #$01
+LDD0F    RTS                  .EXIT
+
+LDD10    CLR   RETRYC
+         LDD   $11,X
+         LDY   $20,X
+         BEQ   LDD86
+         JSR   LDDA0
+         BCS   LDD0F
+         CLRA
+         CLRB
+LDD23    TST   $02,X
+         BEQ   ERR24
+         ADDB  $02,X
+         ADCA  #$00
+         STX   LD40F
+         LDX   FCBCADR
+         CMPD  $20,X
+         BCC   LDD63
+         LDX   LD40F
+         LEAX  $03,X         INCREMENT X BY 3
+         PSHS  A
+         LDA   RETRYC
+         INCA
+         STA   RETRYC
+         CMPA  #$54
+         BEQ   LDD51
+         CMPA  #$A8
+         PULS  A
+         BEQ   ERR24
+         BRA   LDD23
+
+LDD51    PSHS  B
+         LDX   FCBCADR
+         LDD   $40,X
+         BSR   LDDA0
+         BCS   ERR24
+         PULS  B             RE-INSTATE B REGISTER
+         PULS  A             RE-INSTATE A REGISTER
+         BRA   LDD23
+LDD63    SUBD  $20,X
+         LDX   LD40F
+         LDA   $02,X         
+         PSHS  B             SAVE REGISTER B
+         SUBA  $00,S+
+         DECA
+         TFR   A,B
+         LDA   $00,X
+         ADDB  ERORSTAT,X
+         LDX   FCBCADR
+         BCS   LDD80
+LDD7B    CMPB  $3C,X
+         BLS   LDD86
+LDD80    SUBB  $3C,X
+         INCA
+         BRA   LDD7B
+LDD86    JSR   RDSECT        READ A SECTOR
+         BCS   LDD9F
+         LDX   FCBCADR
+         LDD   $42,X
+         CMPD  $20,X
+         BEQ   LDDAB
+         LDB   #$19          RECORD NUMBER MATCH ERROR - FILE DAMAGED
+         BRA   SETERA
+ERR24    LDB   #$18          NON-EXISTANT RECORD NUMBER SPECIFIED
+SETERA   ORCC  #$01          SET C
+LDD9F    RTS                 .EXIT
+LDDA0    JSR   RDSECT        READ A SECTOR
+         BCS   LDDAD
+         LDX   FCBCADR       SET X TO CURRENT FCB ADDRESS
+         LDB   #$44
+         ABX
+LDDAB    ANDCC #$FE
+LDDAD    RTS                 .EXIT
+LDDAE    LDX   FCBCADR       SET X TO CURRENT FCB ADDRESS
+         LDB   #$0B          LOAD B WITH COUNT OF 11
+LDDB3    LDA   NAMWKBUF,X 
+         STA   FILENAME,X
+         LEAX  $01,X         INCREMENT X BY 1
+         DECB                .DECREMENT B BY 1
+         BNE   LDDB3
+         RTS                 .EXIT
+ 
+FNDRIVE  LDX   FCBCADR       LOAD X WITH CURRENT FCB ADDRESS
+         LDA   DRIVENO,X
+         INCA
+         CMPA  #$04
+         BCC   ERR16
+         STA   DRIVENO,X
+         BNE   LDDD1
+         JSR   DDCREADY
+         BRA   LDDD4
+LDDD1    JSR   DDQCREDY
+LDDD4    BCS   FNDRIVE
+         RTS                 .EXIT
+ERR16    LDB   #$10          DRIVES NOT READY
+         SEC                  SET C
+         RTS                 .EXIT
+. CHECK FILE LOCK AS WELL AS FILE HAS BEEN LOCKED
+.
+CHKBNLOCK
+         CLR   HASLK         CLEAR HAS BEEN LOCKED FLAG
+         BSR   CHECKLOCK
+         BCS   CHKERR
+         TST   HASLK         TEST HAS BEEN LOCKED FLAG
+         BEQ   CHKBNEXIT
+         LDB   #20           RETURN ERROR 20
+CHKERR   SEC
+CHKBNEXIT RTS
+
+HASLK    FCB   0
+
+
+. CHECK FILE LOCK
+.
+CHECKLOCK
+         JSR   FINDP13       FIND THE FILE NAME
+         BNE   LOCKER1       BRANCH IF ERROR
+         PSHS  X
+NEXTFIL  LDX   CPTR,X        GET CIRCULAR LINK
+         CMPX  0,S
+         BEQ   NOLOCK        BRANCH IF END OF CHAIN
+         LDA   ATTR,X        GET ATTRIBUTE
+         BITA  #$05
+         BEQ   NEXTFIL       TRY NEXT FILE
+         INC   HASLK         SET HAS BEEN LOCKED FLAG
+         BITA  #$01          TEST LOCKED ONLY
+         BEQ   NEXTFIL
+.FILE IS LOCKED
+         LDD   TIMPTR+1,X
+         COMA;COMB
+         ADDD  #1
+         SEI
+         ADDD  TIMELS        GET ELAPSED TIME
+         TFR   D,U
+         PSHS  CC
+         LDB   TIMPTR,X
+         PULS  CC
+         BLS   FILCH1        NO CARRY OVER TO MS BYTE OF TIME
+         INCB
+FILCH1   CMPB  TIME  
+         CLI
+         BLO   FILUNL        ELAPSED TIME > 10 minutes,GO TO UNLOCK
+         CMPU  #6000         ELAPSED TIME > 1 minute ?
+         BLO   FILOCK        NO,CANNOT UNLOCK FILE
+FILUNL   BSR   FILUN1        UNLOCK THIS FILE
+         BRA   NOLOCK
+FILOCK   LDB   #34           ERROR 34-FILE IS LOCK
+LOCER1   SEC
+NOLOCK   PULS  X,PC
+LOCKER1  LDB   #13           ILLEGAL FCB USED
+         SEC
+         RTS
+FILE_LOCK
+         BSR   CHECKLOCK     CHECK FILE LOCK
+         BCS   LOCKER2       LOCK ERROR
+         LDA   ATTR,X
+         BITA  #$02          RANDOM FILE?
+         BEQ   LOCKER3       BRANCH IF TRY TO LOCK SEQ FILE
+         ORA   #$05          SET LOCKED FLAG,AND SET "HAS LOCKED" FLAG
+         STA   ATTR,X
+         SEI
+         LDB   TIME
+         STB   TIMPTR,X      STORE IN TIME POINTER
+         LDD   TIMELS
+         STD   TIMPTR+1,X
+         CLI
+         CLC
+LOCKER2  RTS
+LOCKER3  LDB  #33           ERROR 33-CAN NOT LOCK SEQ FILE
+         SEC
+         RTS
+
+FILE_UNLOCK
+         JSR  FINDP13
+         BNE  LOCKER1
+FILUN1   LDA  ATTR,X
+         ANDA #$FE
+         STA  ATTR,X
+         CLC
+         RTS
+

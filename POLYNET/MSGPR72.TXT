@@ -1,0 +1,839 @@
+.MSGPR72      5 7 83         IN MESSAGE RELAY,MESSAGE TYPE ALWAYS=19
+.MSGPR70      4 6 82         NEW FMS
+.MSGPR65      4 5 82         CLOSE ONE FILE ON ERROR
+.MSGPR65      14 4 82        QUEUE FULL MESSAGE
+.MSGPR65       5 4 82        CORRECTED FOR 3 SLAVE DRIVES
+.MSGPR65       8 3 82        ADDED MESSAGE RELAY IN MASTER
+.MSGPR62       3 2 82        FAST COMM NEW SWI'S NO
+.MSGPR51       28.8.81       WORKING DRIVE = 0
+.MSGPR50       24.8.81       BYPASS KEYSWITCH FOR MINIMASTER.....
+
+MGETCHR:
+        PSHS   B,X           SAVE B,X REGS AS REQUIRED IN FLEX ROUTINE
+        LDX    #MFCB         POINT X TO BUFFER
+        CLR    0,X           FUNCTION CODE IS ZERO
+        LDY    #1
+
+        JSR    SENDMSG
+SPOL    LDX    #MFCB         POINT X TO BUFFER
+        LDY    #1
+        JSR    SPECPOL
+        BNE    SPOL
+        LDX    #MFCB
+        LDA    0,X
+        CLRB
+        PULS   X,B,PC
+
+MPUTCHR:
+        PSHS   X,B
+        LDX    #MFCB
+        LDB    #1            ** FUNCTION CODE FOR PUTCHR
+        STB    0,X
+        STA    1,X           STORE THE CHAR TO BE PRINTED
+        LDY    #2
+        JSR    SENDMSG
+        PULS   B,X,PC
+
+MINBUFF:
+        LDX    #MFCB
+        LDB    #2            FUNCTION CODE FOR INBUFF IS 2
+        STB    0,X
+        LDY    #1
+        JSR    SENDMSG
+SINBF   LDX    #100
+        JSR    DELAY
+        LDX    #LINBUF
+        STX    BUFPNT
+        LDY    #128
+        JSR    SPECPOL
+        BNE    SINBF
+        RTS
+
+MPSTRNG:
+        BSR    MPCRLF        PRINT CR,LF FIRST
+        PSHS   X             REQUIRED BY FLEX
+        LDY    #MFCB
+        LDB    #3            FUNCTION CODE FOR PSTRNG IS 3
+        STB    0,Y          STORE AS FIRST BYTE IN BUFFER
+        CLRB
+STRLGH  INCB
+        LDA    0,X+          TRANSFER STRING TO BUFFER
+        STA    B,Y
+        CMPA   #EOT
+        BNE    STRLGH
+        CLRA
+        INCB
+        TFR    D,Y           B CONTAINS LENGTH OF STRING
+        LDX    #MFCB
+        JSR    SENDMSG
+        PULS   X,PC
+
+MPCRLF:
+        PSHS   X             REQUIRED BY FLEX
+        LDX    #MFCB
+        LDB    #4            **FUNCTION CODE FOR PCRLF
+        STB    0,X
+        LDY    #1
+        JSR    SENDMSG
+MPCPOL  LDX    #MFCB          CHECK FOR EXIT FLAG
+        LDY    #1
+        JSR    SPECPOL
+        BNE    MPCPOL         NO REPLY TRY AGAIN
+        LDA    0,X
+        BEQ    PCLFEXIT       EXIT FLAG NOT SET
+        JMP    $CD03          GO TO WARM START AND RETURN
+PCLFEXIT PULS   X,PC
+
+MOUTDEC:
+        PSHS   B,X           SAVE REGS AS REQUIRED BY FLEX
+        LDX    #MFCB
+        LDB    #5            **FUNCTION CODE FOR OUTDEC
+        STB    0,X+
+        PULS   B
+        STB    0,X+
+        PULS   Y
+        LDD    0,Y
+        STD    0,X
+        LDX    #MFCB
+        LDY    #4
+        JSR    SENDMSG
+        RTS
+
+MOUTHEX:
+        PSHS   B,X
+        LDA    0,X          LOAD THE HEX NUMBER
+        LDX    #MFCB
+        LDB    #6           FUNCTION CODE FOR OUTHEX IS 6
+        STB    0,X
+        STA    1,X
+        LDY    #2
+        JSR    SENDMSG
+        PULS   B,X,PC
+
+MOUTADR:
+        LDD    0,X          LOAD 2 BYTES ADDRESS
+        LDX    #MFCB
+        PSHS   B
+        LDB    #7           FUNCTION CODE FOR OUTADR IS 7
+        STB    0,X
+        PULS   B
+        STD    1,X
+        LDY    #3
+        JSR    SENDMSG
+        RTS
+
+TYCONT: PSHS   X,B
+        LDX    #MFCB
+        LDB    #8
+        STB    0,X
+        LDY    #1
+        BSR    SENDMSG
+        LBRA   SPOL
+
+MRPTERR:
+        PSHS   X          SAVE REG
+        LDY    #MFCB
+        LDB    #64
+        JSR    MOVE
+        LDX    #MFCB
+        LDB    #9         FN CODE FOR ERR REPORT IS 9
+        STB    0,X
+        LDY    #64
+        BSR    SENDMSG
+        PULS   X,PC
+
+SENDMSG PSHS   X
+        LDX    #400
+
+        JSR    DELAY
+        PULS    X
+        LDB    #19
+        JSR   SEND
+        RTS
+*****************************************************************
+
+MASTBT:
+        JSR    RESUME                    .FOR PRINT SPOOLING
+RECONFIG                                 .RECONFIGURE LINE LOOP
+        LDA    ADDR
+        PSHS   A             SAVE ADDR
+        JSR    LOOPSU                    .LOOP SET UP
+        PULS   A             RESTORE ORIG ADDR TO ENSURE EQUAL POLY
+        STA    ADDR                  PRIORITY
+.        JSR    BUFINIT       INIT MEM BUFFERS
+.        LDX    #CHKCNT       DISK CHECK COUNT FOR DRIVES EXPIRED?
+.        LDB    #3            START WITH 3RD DRIVE
+.LLREC1  TST    B,X           COUNT EXPIRED?
+.        BEQ    LLREC2        YES
+.        DEC    B,X           NO - DECREMENT
+.LLREC2  DECB                 GO ON TO NEXT DRIVE
+.        BGE    LLREC1
+        JSR    WOTSTIM      GET TIME
+        STD    LSTIM         SAVE AS START TIME
+NXTPOLE
+        JSR    WOTSTIM      GET TIME
+        SUBD   LSTIM         CALC TIME SINCE LAST LOOP SETUP
+        CMPD   #600          >= 6 SECONDS?
+        BLO    SPOLER1
+. BEFORE LOOP SETUP,CHECK ANY POLY NOT ONLINE FOR > 60 SEC
+        LDU    #IDTAB
+NXTETR  CMPU   TABEND
+        BEQ    RECONFIG      NOW GO TO RECONFIGURE
+        DEC    2,U
+        BEQ    DELETE        IF TIME OUT,DELETE THIS POLY FROM TABLE
+        LEAU   3,U           POINT TO NEXT ONE
+        BRA    NXTETR
+.DELETE POLY ID FROM TABLE AND DELETE ALL FILES ASSOCIATED WITH IT
+DELETE  LDX    TABEND
+        LEAX   -3,X
+        STX    TABEND
+        LDD    0,U
+        STD    FMSADDR
+        PSHS   U
+DELT1   LDA    3,U
+        STA    0,U+
+        CMPU   TABEND
+        BLS    DELT1
+        LEAU   -3,U
+        JSR    FMSCLS        CLOSE ALL FILES FOR THIS POLY
+        PULS   U
+        BRA    NXTETR        NEXT ENTRY
+
+
+SPOLER1 BSR    IDLE
+.GENERAL POLL
+        LDX    #MFCB
+        LDY    #320
+        TST    ADDRMAX       IF NO POLY ON NETWORK
+        BEQ    NXTPOLE       DON'T DO GENERAL POLL
+        JSR    GENPOL
+        BGT    RECONFIG                  .LINE LOOP BREAK
+        BNE    NXTPOLE                   .POLY HAS NOTHING TO SEND
+        BRA    MSG_RECEIVED
+.
+WOTSTIM PSHS   X
+        SWI
+        FCB    24            RETURN TIME
+        PULS   X 
+        RTS
+SETIM   LDA    0,X           REPLACE SWI 21 FOR SET CLOCK STRING
+        STA    TIME
+        LDD    1,X
+        STD    TIMELS
+        RTS
+.SPECIFIC POLL
+SAMEPOLL
+        LDX   #MFCB      WHERE TO PUT MSG
+        LDY   #320       MAX LENGTH
+        JSR    SPECPOL                   .USED ONLY AT BOOT TIME
+        BMI    NXTPOLE                   .POLY HAS NOTHING TO SEND
+       LBNE    RECONFIG
+.
+MSG_RECEIVED
+.
+        STY   MSGLTH    .MESSAGE RECEIVED
+        STB   MSGTYP    .STORE LENGTH AND TYPE
+.
+.  TEST FOR MESSAGE TYPE 1 (THE BOOT LOADER)
+.
+        BRA    CHECK3
+.
+.
+.IDLE BETWEEN POLLS
+IDLE                .*** CALL SPOOLER 255 TIMES
+        LDB    #255
+SPOOLER_CALL_LOOP
+        PSHS   B               SAVE COUNTER
+        JSR    SPOOLER
+        PULS   B             RESTORE COUNTER
+        DECB
+        BNE    SPOOLER_CALL_LOOP
+        RTS
+.
+.
+.
+.
+.
+OPENFILE
+.MOVE F/N INTO FCB
+        LDY   #FCB+4      . ADDRESS OF START OF FILENAME IN FCB
+        LDB   #11
+NAME_LOAD
+        LDA   ,X+        .COPY THE CHARACTERS
+        STA   ,Y+        .OF THE FILENAME
+        DECB
+        BNE   NAME_LOAD
+        LDA   SASN
+        STA   FCB+3      SYS DRIVE
+.MOVE F/N TO ERROR BUF IN CASE ERROR OCCURS
+OPENF   LDX   #FCB+4
+        LDY   #ERRNAM
+        LDB   #11
+        JSR   MOVE
+.OPEN FILE
+        LDX   #FCB  .ADDRESS OF START OF FCB
+        LDA   #1          .OPEN FOR READ (CODE = 1)
+        STA   FCB
+        JSR   FMSCALL     .OPEN FILE
+        BNE   OF99
+        LDA   #$FF    .USED TO STOP
+        STA   FCB+59     .SPACE COMP
+        LDD   FCB+17
+        STD   FCB+30
+        CLRA                 SET ZERO COND
+OF99    RTS
+.
+.
+NEXTSEC
+        LDX   #FCB
+        LDD   NXTTS,X
+        STD   30,X
+        LDA   #9
+        STA   0,X
+        JMP   FMSCALL
+.
+.
+CLOSFILE
+        BSR   CLOSFIL
+        JMP   NXTPOLE
+
+CLOSFIL
+        LDX   #FCB
+        LDA   #4
+        STA   FCB
+        JMP   FMSCALL
+.
+CHECK3
+        CMPB  #13
+       LBEQ   MAST_1
+        CMPB   #14              FMS CLOSE CALL
+        LBEQ   MAST_2           CLOSE FILES FOR POLY
+.
+CHECK4                                      .DATE-TIME REQUEST
+        CMPB   #4
+        BNE    CHECK5                       .NOT A DATE-TIME REQUEST
+. DATE TIME  STORE / REQUEST
+        LEAY   0,Y                          .TEST CONTENT OF Y FOR ZERO
+        BEQ    DTIMREQ                      . REQUEST FOR DATE-TIME
+        LDX    #MFCB                        .START OF MSG ADDRESS
+        LDY    #SYSDAT                      .POINT TO START OF DATE
+SDATELP
+        LDA    0,X+                         .COPY DATE INTO SYSDATE AREA
+        STA    0,Y+
+        CMPY   #SYSDAT+3
+        BLO    SDATELP
+        JSR    SETIM
+        JMP    NXTPOLE
+.
+DTIMREQ                     .*** NOW RETURN DATE/TIME TO POLY
+        LDX    #MFCB
+        LDY    #SYSDAT
+RDATELP
+        LDA    0,Y+
+        STA    0,X+
+        CMPY   #SYSDAT+3
+        BLO    RDATELP
+        LDA    TIME
+        STA    0,X+
+        LDD    TIMELS
+        STD    0,X
+        LDX    #MFCB                       .RETURN MSG TO POLY
+        LDY    #6                         .6 BYTES TO SEND
+        LDB    #4            DATE/TIME MSG TYPE
+        JSR    SEND          SEND DATE/TIME
+        TST    SYSDAT        ANY DATE PRESENT?
+        LBNE   NXTPOLE       YES RETURN TO GENERAL POLL
+DAT2    LDX    #MFCB         WHERE TO PUT RX'd MSG
+        LDY    #320          MAX LENGTH
+        JSR    SPECPOL       POLL THIS POLY UNTIL A DATE IS OBTAINED
+        BNE    DAT2
+        JMP    MSG_RECEIVED  PROCESS RESPONSE
+.
+.
+CHECK5                    .*** CHECK FOR PRINTER SPOOLER REQUESTS
+        CMPB   #5
+        BNE    CHECK6          .NOT A PRINT SPOOLER REQUEST
+        LDD    MSGLTH          .HOW LONG?
+        BEQ    SENDPQUE        .ZERO LENGTH MSG
+        CMPD   #PQREQS         .LENGTH OF AN ENTRY (12 BYTES)
+        BNE    SENDPQUE        .WRONG SIZE
+        LDX    #MFCB
+        JSR    SP_ADD_ENTRY
+         BCC    SENDPQUE
+         LDX    #LLQFUL
+LLSEND   LDY    #1
+         JMP    SEND_IT
+.
+.    READ QUEUE BACK TO POLY
+.
+SENDPQUE
+        LDX    #PRINTQS
+        LDY   #(PRINTQE-PRINTQS) .LENGTH OF QUE IN Y
+        JMP    SEND_IT
+.
+.
+.
+CHECK6
+         CMPB   #6
+         BNE    CHECK7
+        LDD    MSGLTH          .HOW LONG?
+        BEQ    SENDPQUE        .ZERO LENGTH MSG
+        CMPD   #PQREQS         .LENGTH OF AN ENTRY (12 BYTES)
+        BNE    SENDPQUE        .WRONG SIZE
+         LDX    #MFCB
+         JSR    SP_DELETE_ENTRY
+.                       DELETES AN ENTRY IN THE PRINT SPOOLER QUEUE
+         BCC    SENDPQUE
+         LDX    #LLQNF
+         BRA    LLSEND
+.
+.
+.
+.
+CHECK7
+        CMPB   #7                   .DOS COMMAND FOR MASTER?
+        BNE    CHECK8
+        LDX    #MFCB
+        LDY    #LINBUF              .$C080
+DOSCLP
+        LDA    ,X+
+        STA    ,Y+
+        CMPY   #LINBUF+128
+        BHS    DOSCCC
+        CMPA   #$0D                .CARRIAGE RETURN
+        BNE    DOSCLP               NO
+DOSCCC
+        LDX    MFCB+130
+        STX    BUFPNT               PUT BUF POINTER TO START OF LINE !
+        LDD    MFCB+128
+        STD    USERPSWD           STORE USER PASSWORD
+        LDA    MFCB+132            USER DEFAULT DRIVE NUMBER
+        STA    WASN                STORE AS WORK DRIVE
+        STA    SASN                STORE AS SYSTEM DRIVE
+        CLRD
+        STD    FMSADDR
+        JSR    DOCMND              .DO THE COMMAND
+        STB    MFCB                RETURN ERROR MSG
+        LDX    BUFPNT
+        STX    MFCB+1             RETURN BUFFER POINTER
+        CLR    WASN               RESET MASTER DEFAULT DRIVE TO 0
+        CLR    SASN             
+        LDX    #MFCB              ADR MSG
+        LDY    #3
+        LDB    #7                 MSGTYPE
+        JSR    SEND
+        JMP    NXTPOLE            SERVE NEXT POLY
+
+CHECK8
+         CMPB  #8
+         BNE   CHECKLM
+         CMPY  #3
+         BNE   EXIT8         MESSAGE LENGTH MUST BE 3
+         LDA   MFCB
+         CMPA  #$A9
+         BNE   EXIT8
+         LDD   MFCB+1        LOAD SUPER PASSWORD
+         STD   SPASS
+         INC   SPUFG
+EXIT8    JMP   NXTPOLE
+
+CHECKLM
+         LDA   ADDR
+         STA   CURRADDR
+         STA   LOADADDR      SAVE ADDRESSES FOR B/C LOAD
+         CMPB  #LMODULE      MSG TYPE $11
+          BEQ  LOADER1       REQUEST FROM MENU TO LOAD MODULE
+
+.REQUEST FOR INITIAL LOADUP
+
+         CMPB  #LOADREQ      MSG TYPE $10
+         BEQ   LOADER
+         CMPB  #18           BROADCAST REQUEST?
+        LBNE   NXTPOLE       NO
+         LDA   #1            YES CHECK THAT ADDRESS OF POLY IS 1
+         CMPA  ADDR
+         LBNE  NXTPOLE       NOT #1 !!!!    IGNORE
+         STA   BCMODFLG      SET THE BROADCAST MODE
+         JMP   NXTPOLE       DONE
+LOADER1
+          LDD  MSGLTH
+          STB  FILESPLGH     STORE LENGTH
+          LDY  #FILESPEC     MOVE FILE SPEC INTO TEMP AREA
+          LDX  #MFCB
+          JSR  MOVE
+LOADER
+.BROADCAST MODE ENABLED ?
+         TST   BCMODFLG
+         BEQ   LD10
+.REQ FROM UNIT 1?
+         LDA   ADDR
+         CMPA  #$01
+         LBNE  NXTPOLE       NO -IGNORE
+.YES -BEGIN BROADCAST
+         CLR   LOADADDR      TO ADDRESS ALL UNITS
+         CLR   BCMODFLG
+         CLR   FMSADDR
+         CLR   FMSADDR+1
+         JSR   FMSCLS        CLOSE ALL FILES
+         JSR   LOOPSU        INIT ALL MSG NO'S
+         CLR   ADDR
+.FORCE UNIT(S) BACK TO LOGON SCREEN
+         CLRA
+         JSR   LOGOFFREQ
+         LDX   #$FFFF
+         JSR   DELAY
+.INIT LAST-MSG TIME
+LD10     JSR   WOTSTIM       GET TIME
+         STD   LSTIM
+         CLR   FILELOD         NO FILE LOADED YET
+         TST   LOADADDR
+         BEQ   BCMSG
+         LDX   #LOADMSG
+         LDB   #LOADMSL
+         BRA   LOADSEND
+BCMSG    LDX   #BCLOAD
+         LDB   #BCLOADL
+LOADSEND JSR   SENDBIN
+
+.RELOAD OF OP SYS REQD?
+.YES -SEND OP SYS BINARY CODE
+         LDX   #DOSFN
+         JSR   SBINF
+.         LDD   #$CD00          COLD START FOR FLEX
+.         STD   PROGST1
+.SEND BASIC EXTS BINARY CODE
+         LDX   #BASICFN
+         JSR   OPENFILE      OPEN BASIC FILE
+         BNE   SLODER1
+         JSR   NEXTSEC       READ 1ST SECTOR
+SLODER1  LBNE  SLODERR
+         LDX   FCB+NXTTS+16  GET ADDRESS OF USER AREA
+         STX   BASLO         SAVE
+         JSR   SBINF2        SEND BINARY TO UNIT(S)
+.         LDD   #$A006        COLD START FOR BASIC
+.         STD   PROGST1
+.SEND MENU (COMPILED BASIC CODE)
+         TST   LOADADDR      MODULE LOADING
+         BEQ   MODULELOD
+         LDX   #MENUFN
+         LDB   #LMENUFN
+SENDBAC  JSR   SBASF
+.         LDD   #$A009        BASIC COLD START WITH BASIC PROGRAM
+.         STD   PROGST1
+         TST   LOADADDR
+         BNE   DATEREQU
+         LDX   #BCENLOD
+         LDB   #BCENLDL
+         JSR   SENDBIN
+
+         BRA   DATEREQU
+MODULELOD
+         LDX   #FILESPEC
+         LDB   FILESPLGH
+         BRA   SENDBAC
+.MASTER HAS VALID DATE?
+DATEREQU
+.DATEREQU LDA   SYSMONTH
+.         BEQ   LD30
+.         CMPA  #12
+.         BHI   LD30
+.         LDA   SYSDAY
+.         BEQ   LD30
+.         CMPA  #31
+.         BLS   LD40          YES
+.LD30     JSR   SGO1
+..POLL UNIT 1 FOR RESPONSE
+.         LDA   CURRADDR
+.         STA   ADDR
+.LD35     LDX   #MFCB         RECV BUF ADR
+.         LDY   #320          RECV BUF LGH
+.         JSR   SPECPOL
+.         BNE   LD35          NO RESPONSE
+.         CMPB  #4            DATE/TIME BUF?
+.        LBNE   MSG_RECEIVED  NO
+..DATE/TIME RECVD -MOVE DATE INTO SYSDAT
+.         LDX   #MFCB
+.         LDY   #SYSDAT
+.         LDB   #3            3 BYTES
+.         JSR   MOVE
+..SET MASTER'S CLOCK TO TIME RECVD
+.         TFR   X,D
+.         JSR   SETIM
+.         BRA   LD40
+.TELL UNIT 1 TO BEGIN EXEC (MASTER ALREADY HAS VALID DATE)
+LD40     TST   LOADADDR
+         BEQ   LD70
+         BSR   SGO1
+         JMP   NXTPOLE
+.TELL ALL TO BEGIN EXEC
+LD70     LDA   #$7F
+         BSR   SGOALL
+.LOOP SETUP AND CONTINUE NORMAL POLLING
+         JMP   RECONFIG
+
+.MOVE SUBROUTINE
+MOVE:    LDA   ,X+
+         STA   ,Y+
+         DECB
+         BNE   MOVE
+         RTS
+
+.SEND BIN TO SET "ENDLOAD" FLAG IN POLY
+SGO1     LDA   CURRADDR      ADDRESSED UNIT ONLY
+SGOALL   STA   LDEND+1       FLAG VALUE
+         LDX   #PROGST
+         LDB   #PROGSTLG
+         BSR   SENDBIN
+         LDX   #LDEND
+         LDB   #LLDEND
+.                            DROP THRU TO SEND BINARY
+
+.SEND BUFFER CONTAINING BINARY LOAD DATA.
+.  X = ADR OF BUF, B = NO OF BYTES.
+
+SENDBIN  CLRA
+         TFR   D,Y           Y <- LENGTH
+SENDB1   JSR   WOTSTIM
+         SUBD  LSTIM         >10 MSEC SINCE LAST BUF?
+         CMPD  #2
+         BLO   SENDB1        NO
+         LDB   #LOAD         MSG TYPE = LOAD DATA
+         JSR   SEND          SEND BUFFER
+         BNE   SENDBE        XMIT ERROR
+         JSR   WOTSTIM
+         STD   LSTIM         UPDATE TIME OF LAST BUFFERFUL
+         RTS
+
+.GIVEN X = ADR FILENAME (IN FCB FORMAT);
+. SEND BINARY FILE CONTENTS.
+
+SBINF    JSR   OPENFILE      OPEN NAMED FILE
+         BNE   SLODERR       ERROR
+SBLP     JSR   NEXTSEC       READ SECTOR
+         BNE   SLODERR       ERROR
+SBINF2   LDX   #FCB+NXTTS+4  POSN X TO DATA
+         LDB   #252          LENGTH
+         BSR   SENDBIN       SEND BINARY
+         LDX   FCB+NXTTS     GET NEXT T/S
+         BNE   SBLP          STILL MORE
+         JMP   CLOSFIL       END OF FILE -CLOSE & RETURN
+
+.ERROR ON DISK READ
+SBERR
+SLODERR  LDA   FCB+3         DRIVE NO
+         ADDA  #$30          CONV TO ASCII
+         STA   ERRDRV        SET DRIVE NO IN ERR MSG
+         LDX   #ERRBF
+         LDB   #LERRBF
+         PSHS  X,B
+         BSR   SENDBIN       ENSURE LODFLAG IS SET
+         LDA   #$FF
+SLODER2  BSR   SGOALL        FORCE POLY'S BACK TO LOGON SCREEN
+         LDX   #$FFFF
+SDELAY   PSHS  A,B,X,Y,U,CC,DP   15 uSec*2*$FFFF
+         PULS  A,B,X,Y,U,CC,DP
+         LEAX  -1,X
+         BNE   SDELAY
+         PULS  B,X
+         BSR   SENDBIN       DISPLAY ERR MSG ON SCREEN
+SENDBE   LDS   #LINBUF       CUT STACK
+         LDX   #FCB
+         LDA   #4
+         STA   ,X
+         JSR   FMSCALL
+         JMP   RECONFIG
+
+GETBYT   LDX   #FCB
+         JSR   FMSCALL
+         BNE   SLODERR
+         RTS
+
+.GIVEN X = ADR FILENAME, B=FILENAME LGH,
+.CONVERT COMPILED BASIC FILE TO BINARY FORMAT & SEND.
+
+SBASF    LDY   #LINBUF       PTR DOS LINE BUFFER
+         STY   BUFPNT        SET DOS'S PTR
+         JSR   MOVE          MOVE FILENAME TO DOS LINE BUF
+         LDA   #$0D          CR
+         STA   ,Y            CR AT END OF FILENAME
+.SET UP FCB WITH FILENAME
+         LDX   #FCB
+         JSR   GETFIL
+         BCS   SLODERR       INVALID FILENAME
+         LDA   #8            DFT EXT = .BAC
+         JSR   SETEXT
+.OPEN FILE
+         JSR   OPENF
+         BNE   SLODERR
+.SET PTRS
+         LDD   BASLO
+         STD   OUTBF+1       LOAD ADDRESS
+.
+         LDY   #OUTBF+4      OUTPUT PTR
+.GET IDENTIFIER BYTE
+         BSR   GETBYT
+         CMPA  #$03
+         BNE   SBERR         NOT COMPILED BASIC
+.START OF BASIC LINE
+         CLR   DECRYPT
+.GET LINE LENGTH
+         BSR   GETBYTD
+SBSLP    TSTA
+         BEQ   SBSEND        END OF BASIC CODE
+         PSHS  A
+.OUTPUT LINE DATA
+SBSCLP   BSR   PUTBYT
+         BSR   GETBYTD
+         DEC   ,S            LINE COUNT
+         BNE   SBSCLP
+.END OF LINE LOOP
+         LEAS  1,S
+         BRA   SBSLP
+.END OF BASIC CODE -
+. SEND LAST BUFFERFUL
+SBSEND   BSR   SNDBAS
+.SET UP VARBEG AND VAREND
+         LDD   OUTBF+1
+         STD   VARBEG
+.GET VAR TABLE SIZE
+         JSR   GETBYT
+         PSHS  A
+         JSR   GETBYT
+         TFR   A,B
+         PULS  A
+.CALC ADR END OF VAR TABLE
+         ADDD  VARBEG
+         STD   VAREND
+.SEND BINARY TO ZERO LAST NEXT-LINE PTR AND TO STORE
+.  PTRS FOR BASIC
+         LDX   #BASBEG
+         LDB   #BASLGH
+         JSR   SENDBIN
+.CLOSE FILE AND RETURN
+         JMP   CLOSFIL
+
+.GET BYTE AND DECRYPT
+GETBYTD  JSR   GETBYT
+         SUBA  DECRYPT
+         INC   DECRYPT
+         RTS
+
+.OUTPUT BYTE TO BUF
+PUTBYT   CMPY  #OUTBFE       BUF FULL?
+         BLO   PB10          NO
+         PSHS  A             SAVE BYTE
+         BSR   SNDBAS        SEND BUFFER
+         PULS  A             RESTORE BYTE
+PB10     STA   ,Y+           STORE BYTE
+         RTS
+
+.SEND BUFFERFUL OF BASIC TO POLY
+SNDBAS   TFR   Y,D           BUF END PTR
+         SUBD  #OUTBF+4      BUF DATA START
+         STB   OUTBF+3       LOAD DATA LENGTH
+         ADDB  #4            INCLUDE 02, ADDR, LGH IN COUNT
+         LDX   #OUTBF
+         JSR   SENDBIN       SEND BUFFER
+         CLRA
+         LDB   OUTBF+3       D <- DATA COUNT
+         ADDD  OUTBF+1       ADD CURR LOAD ADDR
+         STD   OUTBF+1       STORE NEW LOAD ADDR
+         LDY   #OUTBF+4      SET NEW BUF PTR
+         RTS
+..................................
+DOSFN    FCB   'POLYSYS',0,'SYS'
+BASICFN  FCB   'BASIC',0,0,0,'CMD'
+
+MENUFN   FCB   '0.MENU.BAC'
+LMENUFN  EQU   *-MENUFN
+
+FILESPEC FMB   14,0
+FILESPLGH FCB  0
+LDEND    FCB   $04
+         FCB   $00
+LLDEND   EQU   *-LDEND
+
+
+PROGST   FCB   $02,$C1,$00,$03
+         FCB   $7E
+PROGST1  FDB   $A009               ADDRESS FOR START OF PROG
+PROGSTLG EQU   *-PROGST
+
+
+DECRYPT  FCB   0
+BCMODFLG FCB   0
+FILELOD  FCB   0
+
+OUTBF    FCB   $02
+         FDB   $0000         BASIC LOAD ADDR
+         FCB   0             NO OF BYTES
+         RMB   248
+OUTBFE   EQU   *
+
+BASBEG   FCB   $02
+         FDB   $000A
+         FCB   $04           LENGTH
+VARBEG   FDB   0
+VAREND   FDB   0
+BASLGH   EQU     *-BASBEG
+BASLO    FDB   0
+
+SI       EQU   $0F  
+GREEN    EQU   02
+YELLOW   EQU   03
+CYAN     EQU   06
+DH       EQU   13
+TXTT1    EQU   $E800+2
+
+BCLOAD   FCB   02
+         FDB   TXTT1
+         FCB   BCLOADE-BCLOADM
+BCLOADM  FCB   DH,GREEN,"BROADCAST LOADING NOW  "
+BCLOADE
+BCLOADL  EQU   *-BCLOAD
+
+BCENLOD  FCB   02
+         FDB   TXTT1
+         FCB   BCENLDE-BCENLOM
+BCENLOM  FCB   DH,CYAN,"BROADCAST PROGRAM LOADED"
+BCENLDE
+BCENLDL  EQU   *-BCENLOD
+
+LOADMSG  FCB   02
+         FDB   TXTT1
+         FCB   LOADMSE-LOADMSG1
+LOADMSG1 FCB   DH,GREEN,"SYSTEM LOADING NOW"
+LOADMSE
+LOADMSL  EQU   *-LOADMSG
+
+ERRBF    FCB   $02,$E9,$B8
+         FCB   ERRBFE-*-1
+         FCB   'CANNOT READ '
+ERRDRV   FCB   ' .'
+ERRNAM   FMB   11
+ERRBFE
+LERRBF   EQU   *-ERRBF
+......................................
+.
+CURRADDR FCB   0
+LOADADDR FCB   0
+FCB       EQU   FCBADR
+MFCB      EQU   FCBADR
+
+.SFCB     FCB   9,0,0,0       0-3
+.         FMB   26            4-29
+.         FCB   0,3           30,31  (T/S)
+.         FMB   32            32-63
+.         FMB   16            64-79
+.DSKSYS   FMB   13            80-92  (VOL ID, SER NO)
+.         FMB   227           93-319
+.
+MSGLTH    FMB     2
+MSGTYP    FMB     1
+ERROR_IND
+          FMB     1
+LSTIM    FMB   2
+. POLY ID TABLE ,EACH ENTRY HAS 3 BYTES
+. THIS TABLE ALLOW 32 ENTRIES
+TABEND    FDB   IDTAB        END OF TABLE POINTER
+IDTAB     RMB   3*32

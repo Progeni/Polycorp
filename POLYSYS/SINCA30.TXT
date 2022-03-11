@@ -1,0 +1,38 @@
+NUL      EQU   $00
+.
+.        TELETEXT EQUATES
+.
+RED      EQU   1
+GREEN    EQU   2
+YELLOW   EQU   3
+BLUE     EQU   4
+MAGENTA  EQU   5
+CYAN     EQU   6
+WHITE    EQU   7
+FLASH    EQU   8
+STEADY   EQU   9
+SO       EQU   14
+SI       EQU   15
+BLACKBAK EQU   28
+NEWBACK  EQU   29
+.
+ .ASCII EQUATES
+.
+EOT      EQU   $04
+BS       EQU   $08
+EOF      EQU   $08           END OF FILE FLAG
+LF       EQU   $0A
+CR       EQU   $0D
+CAN      EQU   $18
+ESC      EQU   $1B
+LCLR     EQU   $1E           CLEAR TO END OF LINE
+.
+.        OTHER EQUATES
+.
+TOPRAM   EQU   $BFFF         TOP OF USER RAM IN MEMORY MAP 1
+
+
+         ORG   $C080
+LINBUF   RMB   128
+
+

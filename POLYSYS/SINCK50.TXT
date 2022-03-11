@@ -1,0 +1,201 @@
+.FN 16:  OPEN SYSTEM INFO RECORD
+
+OSIREC   CLRB               .OPEN SYSTEM INFORMATION RECORD
+                            .TRACK 0 / SECTOR 3
+         PSHS  B             POINT TO TRACK 0
+         LDB   #$03          SECTOR 3
+         BRA   FMSSKIPD
+
+.FN 6:  OPEN DIRECTORY
+
+DOPEN    LDB   DIR_ADDRESS         SET UP FCB FOR READING DIRECTORY
+         PSHS  B             COPY $0005 INTO NEXT TRACK/SECTOR
+         LDB   DIR_ADDRESS+1 AND RESET DATA INDEX POINTER TO ZERO
+FMSSKIPD LDX   FCBCADR       POINT TO CURRENT FCB
+         STB   SECBUF+1,X
+         PULS  B
+         STB   SECBUF,X
+         CLR   LD418
+         CLRB               .SET DATA INDEX BYTE TO POINT TO THE
+         STB   DATINDEX,X    FIRST BYTE OF THE SECTOR BUFFER
+         RTS                  .EXIT
+
+.
+.FN 7:  GET DIRECTORY INFO RECORD
+.
+GETIR    LDX   FCBCADR       POINT TO CURRENT FCB
+         LDB   DATINDEX,X    LOAD DATA INDEX
+.BRANCH IF THE NEXT SECTOR IS NOT REQUIRED
+         BNE   NEXT_SECTOR_NOT_REQUIRED
+         JSR   GETIR2
+         RTS
+NEXT_SECTOR_NOT_REQUIRED
+         LDA   DATINDEX,X    COPY DATA INDEX
+         STA   CURDIRAD+2,X  TO CURRENT DIRECTORY DATA INDEX
+         LDB   #$18          COPY 24 BYTES OF INFORMATION FROM
+FMSLPCCA PSHS  X,B           DIRECTORY ENTRY TO BOTTOM OF THE CURRENT
+         JSR   FCB_READ_BYTE FCB (NAME THRU DATE) - GET NEXT BYTE
+         PULS  X,B
+         STA   FILENAME,X    COPY BYTE INTO BOTTOM OF FCB
+         LEAX  $01,X         INCREMENT X BY ONE
+         DECB                .DECREMENT B BY 1
+         BNE   FMSLPCCA
+         CLC                 DONE - CLEAR CARRY AND EXIT
+FMSEXERD RTS                  .EXIT
+
+
+****************************************************************
+.  SEND MESAGE TO MASTER TO DO FMS FUNCTIONS
+.
+UD       EQU   FIRSTDIR
+UA       EQU   UD
+UB       EQU   UA+1
+UCC      EQU   UA+2
+PASSWD   EQU   $DFF4
+FMS_SEND_MSG EQU 41
+
+ROPEN
+WOPEN
+UOPEN
+ZZZZB
+NEWRND
+         JSR   FIND_POINTER  ADD FCB TO CHAIN
+         LDX   FCBCADR       LOAD FCB ADDR
+         LDD   PASSWD        LOAD PASSWORD
+         STD   64,X          STORE IN SECTOR BUFFER
+         BSR   FMS68         SEND IT TO MINIMASTER
+        LBCS   DELETE_POINTER
+         RTS
+
+RNFILE
+DLFILE
+         LDX   FCBCADR       LOAD FCB ADDR
+         LDD   PASSWD        LOAD PASSWORD
+         STD   64,X
+
+FMS68
+RSSECT
+FNDRIVE
+         LDX   FCBCADR
+         LDY   #68           ONLY 68 BYTES NEEDED
+         BRA   SKIPP
+
+CLFILE   JSR   DELETE_POINTER FROM OPEN CHAIN
+         LDX   FCBCADR
+         LDA   ACTSTAT,X
+         PSHS  A
+         JSR   FMS320
+         PULS  A
+         BCS   EREXIT        BRANCH IF ERROR
+         CMPA  #1
+         BEQ   NOCHK         DO NOT CHECK FOR .PRT
+         JSR   CHKPRT
+NOCHK    RTS
+
+FMS320
+RWFILE
+GETIR2
+PUTIR
+WSSECT
+ZZZZC
+NSSECT
+POSNRN
+BUREC
+FILE_LOCK
+FILE_UNLOCK
+WRITE_SECTOR
+         LDX   FCBCADR
+         LDY   #320          THE WHOLE FCB IS NEEDED
+SKIPP    STD   UD,X          STORE IN FIRST DELETED DIR  OF FCB
+         TFR   CC,B
+         STB   UCC,X         STORE CC REG IN SCRATCH AREA
+         LDD   $1C,X         OPEN CHAIN LINK ADDR
+         STD   SAVLNK        SAVE IT
+         LDB   #13           MESSAGE NUMBER 13
+         CLR   COPYFG        CLEAR COPY FLAG
+RE_SEND  PSHS  B,X,Y         SAVE REGS ,IN CASE ERROR
+         SWI
+         FCB   FMS_SEND_MSG
+         BCC   SEND_OK       NO ERROR ,REPAIR STACK
+         BSR   COMM_ERR      PRINT WAIT MSG
+         PULS  B,X,Y         RESTORE B,X,Y REGS
+         BRA   RE_SEND
+SEND_OK  LEAS  5,S           REPAIR STACK
+         BSR   RESTORE       RESTORE ORIGINAL MSG
+RECEIVE  LDY   #320          MESSAGE LENGTH IS ALWAYS READY TO RECEIVE
+.                            THE FULL FCB BUFFER
+         LDX   FCBCADR
+         SWI
+         FCB   REC_MSG
+         BCC   REC_OK
+         BITA  #02           CHECK FOR NO COMM
+         BNE   RECEIVE
+         BRA   ERR27
+
+RESTORE  TST   COPYFG        WAT MSG PRINTED?
+         BEQ   RESTEX        NO
+         LDX   #TEMPBUF
+         BSR   RESTORE1      RESTORE IT
+         CLR   COPYFG
+RESTEX   RTS
+
+COMM_ERR TST   COPYFG
+         BNE   PREND         ALREADY PRINT MSG
+         LDD   #TEMPBUF      TEMP BUFFER ADDR
+         LDX   #40           ONLY 40 CHAR
+         LDY   #23*256+0     ROW 23 COLUMN 0
+         SWI
+         FCB   8             COPY FROM SCREEN TO MEM
+         LDA   #1
+         STA   COPYFG        SET COPY FLAG
+         LDX   #WAITMSG      PRINT WAIT MSG
+RESTORE1 LDY   #23*256+0
+PRLOOP   LDB   0,X+
+         BEQ   PREND         FINISHED PRINTING
+         SWI
+         FCB   6             PUT CHAR
+         LEAY  1,Y           INCREMENT TO NEXT POS
+         BRA   PRLOOP
+PREND    RTS
+
+ERR27    LDB   #27           COMM ERROR
+EREXIT   SEC
+         RTS
+
+REC_OK   LDD   SAVLNK        RESTORE LINK ADDR
+         STD   $1C,X         
+         LDA   UCC,X         LOAD RESULTS FROM FMS CALL
+         PSHS   A
+         LDD   UD,X
+         PULS  CC,PC         CONDITION CODE AND RETURN
+
+TEMPBUF  FMB   41,0
+COPYFG   FCB   0
+WAITMSG  FCB   GREEN,"Waiting to access disk. Please wait....",0
+.
+. TO PUT A FILE WITH EXTENSION PRT IN THE PRINT QUEUE IN THE MASTER
+.               FIRST CHECK THE EXTENSION
+.
+CHKPRT  LDX    FCBCADR
+        LDD    FILEEXT,X        .GET FIRST 2 BYTES OF EXTENSION (=PR ?)
+        CMPD   #$5052           . =PR ?
+        BNE    NOTENTQ          .NOT PUT IN QUEUE
+        LDA    FILEEXT+2,X      .IS THE THIRD BYTE A 'T'
+        CMPA   #'T'
+        BNE    NOTENTQ          NO- DO NOT ENTER INTO QUEUE
+        TST    FILENAME,X      TEST FOR DELETED FILE
+        BMI    NOTENTQ         YES DO NOT SENT IT
+        LEAX   DRIVENO,X         .POINT X TO BYTE 3  (DRIVE NO)
+        LDY    #12              .SEND 12 BYTES (DRIVE NO + FULL FILE NAME
+        LDB    ,X               .SET NO HEADING FOR PRT FILES
+        ORB    #$90
+        STB    ,X
+        LDB    #05              .MSG TYPE TO PUT IN PRINT QUEUE
+        SWI
+        FCB    43               .  SEND TO MASTER
+        LDY    #0
+        SWI
+        FCB    44            RECEIVE MESSAGE AND IGNORE
+NOTENTQ CLC
+        RTS
+

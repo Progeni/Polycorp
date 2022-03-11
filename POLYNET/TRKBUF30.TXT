@@ -1,0 +1,145 @@
+         ORG   $CA60
+SECTAB                       . FIRST ENTRY OF SECTAB IS PHYSICAL SECTOR
+.                              SECOND ENTRY IS THE INVERTED POINTER TO SECTOR
+         FCB   $01,$00
+         FCB   $06,$06
+         FCB   $0B,$0C
+         FCB   $04,$03
+         FCB   $09,$09
+         FCB   $0E,$01
+         FCB   $02,$07
+         FCB   $07,$0D
+         FCB   $0C,$04
+         FCB   $05,$0A
+         FCB   $0A,$02
+         FCB   $0F,$08
+         FCB   $03,$0E
+         FCB   $08,$05
+         FCB   $0D,$0B
+         FCB   0              ..................
+
+SECTB2   FCB   $17,$02
+         FCB   $1C,$08
+         FCB   $10,$0E
+         FCB   $15,$05
+         FCB   $1A,$0B
+         FCB   $13,$03
+         FCB   $18,$09
+         FCB   $1D,$00
+         FCB   $11,$06
+         FCB   $16,$0C
+         FCB   $1B,$04
+         FCB   $14,$0A
+         FCB   $19,$01
+         FCB   $1E,$07
+         FCB   $12,$0D
+         FCB   0
+........................................................
+
+
+RDSEC1   JSR   CHECKDC       CHECK DISK CHANGE
+         BEQ   RDSEC5
+         JSR   INITFCB       SET DC FLAG FOR FILES
+RDSEC5   LBSR  BUFLU         BUFFER LOOK UP
+         BNE   RD_SE05
+         PSHS  Y,U           SAVE POINTER
+         LDD   CURPOS,X
+RDSEC4   LDY   #SECTAB       POINT Y TO SECTOR TABLE
+         CMPB  #SECTORS
+         BLO   RDSEC2
+         LEAY  SECTB2-SECTAB,Y
+         SUBB  #$0F
+RDSEC2   SUBB  #1
+         CMPB  #SECTORS-1
+         BHI   RDERR1
+         ASLB
+         LEAY  B,Y
+         LDA   1,Y           LOAD POINTER
+         PULS  Y
+         LEAY  5,Y
+         LDB   A,Y
+         PSHS  B
+         CLRB                
+         LDY   -2,Y          Y POINTS TO TRACK BUFFER
+         LEAY  D,Y           D CONTAINS INDEX
+         LEAX  $40,X         POINTS TO SECTOR BUFFER
+         LDB   #128
+RDSEC3   LDU   0,Y++
+         STU   0,X++
+         DECB
+         BNE   RDSEC3
+         PULS  B,U
+         BITB  #$9C
+RDERR    RTS
+
+RDERR1   ORB   #$10
+         SEC
+         RTS
+RD_SE05  JSR   DRSEL           DRIVE SELECT
+         BCS   RDERR
+         LDY   #BUFPTR         POINTS TO BUFFER POINTER
+         TST   BUFLAG          TEST BUFLAG TO SEE WHICH AREA TO READ INTO
+         BNE   RD_SE10
+         INC   BUFLAG
+         BRA   RD_SE15
+RD_SE10  CLR   BUFLAG
+         LEAY  20,Y
+RD_SE15  LDB   CURPOS,X
+         LDA   DRIVENO,X       DRIVE NUMBER
+         STD   0,Y
+         LDD   CURPOS,X
+         CLR   2,Y
+         INC   2,Y
+         CMPB  #SECTORS
+         BLO   RD_SE25
+         INC   2,Y
+RD_SE25  PSHS  X,Y,U
+         LEAU  5,Y
+         LDX   3,Y
+         LDY   #SECTAB       
+         PSHS  D
+         CMPB  #SECTORS
+         BLO   RD_SE17
+         LEAY  SECTB2-SECTAB,Y
+RD_SE17  LDA   0,S
+RD_SE20  LDB   0,Y
+         BEQ   RD_SE30
+         PSHS  X
+         JSR   DDRSEC
+         STB   0,U+
+         LEAY  2,Y
+         PULS  X
+         LEAX  256,X
+         BRA   RD_SE17
+RD_SE30  PULS  D,X
+         LBRA  RDSEC4
+.
+.
+BUFLU    LDA   DRIVENO,X
+         LDB   CURPOS,X
+         LDY   #BUFPTR
+         CMPD  0,Y
+         BEQ   BUFLU1
+         LEAY  20,Y
+         CMPD  0,Y
+         BNE   BUFLU2
+BUFLU1   LDB   CURPOS+1,X
+         CMPB  #SECTORS
+         BHS   SIDE2
+         LDB   #1
+         BRA   WHSIDE
+SIDE2    LDB   #2
+WHSIDE   CMPB  2,Y
+BUFLU2   RTS
+.
+.
+. WRTIE SECTOR
+WRSECT   BSR   BUFLU           BUFFER LOOK UP
+         BNE   WRSEC1
+         LDA   #5
+         STA   0,Y
+WRSEC1   LDD   CURPOS,X
+         LEAX  $40,X
+         LBRA  DDWSEC
+
+         ERRIF *>$CC00

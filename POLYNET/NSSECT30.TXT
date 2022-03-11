@@ -1,0 +1,42 @@
+NSSECT   BSR   LDAB1         WRITE TO DISK IF CURRENT SECTOR HAS MODIFIED
+         BCS   LDA99         BRANCH IF ERROR
+         CLR   $00,X
+         LSRA
+         LBCS  NXTSEC        READ IN NEXT SECTOR
+         LDB   #$04          LOAD B WITH 4
+         STB   DATINX,X      STORE DATA INDEX
+         CLC
+LDA99    RTS                  .EXIT
+
+LDA9A    LDX   FCBCADR
+         LDA   ACTSTAT,X      ACTIVITY STATUS
+         CMPA  #$83           IS IT ALTERED
+         BNE   LDAAE          BRANCH IF NOT
+         LDA   #$03
+         STA   ACTSTAT,X      RESET IT TO 3
+LDAA7    JSR   WSSECT        WRITE OUT ALTERED SECTOR
+         LBCS  LDBC1         CHECK FOR WHICH ERROR
+LDAAE    CLC
+         RTS                  .EXIT
+
+.WRITE CURRENT SECTOR TO DISK IF IT HAS BEEN ALTERED
+LDAB1    JSR   FINDP13       FIND FILE IN THE FCB CHAIN
+        LBNE   RSTERR        ERROR 13 -ILLEGAL FCB
+         LDA   ATTR,X
+         BMI   ERA32         DISK DOOR OPENED
+         JSR   CHECKDC
+         BEQ   WRLSEC        UPDATE FILE
+         JSR   INITFCB       UPDATE OTHER OPENED FILE STATUS
+ERA32    LDB   #32           ERROR 32 DISK DOOR OPENED
+         BRA   NSERR
+WRLSEC   BSR   LDA9A
+         BCS   LDAC2
+         LDX   FCBCADR
+         LDA   $02,X
+         CMPA  #$03
+         BLS   LDAAE
+         LDB   #$12          SYSTEM FILE STATUS ERROR
+NSERR    SEC                 SET C
+LDAC2    RTS                  .EXIT
+
+

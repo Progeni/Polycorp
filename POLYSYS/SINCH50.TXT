@@ -1,0 +1,205 @@
+.OPSC02        12/5/81       HIGH SPEED BYTE READ/WRITE LOOP
+.                            DISABLE INTERRUPTS DURING FMS CALL
+.        ERRIF *>$D400
+         ORG   $D400         FILE MANAGEMENT SYSTEM
+   
+.----------------------------------------------------------------
+.--------    FCB DESCRIPTION EQUATES   --------------------------
+.----------------------------------------------------------------
+         
+FNCODE   EQU   0             FUNCTION CODE
+ERORSTAT EQU   1             ERROR STATUS BYTE
+ACTSTAT  EQU   2             ACTIVITY STATUS
+DRIVENO  EQU   3             DRIVE NUMBER
+FILENAME EQU   4             FILE NAME
+FILEEXT  EQU   12            EXTENSION
+FILEATTR EQU   15            FILE ATTRIBUTES
+FILESTRT EQU   17            STARTING DISK ADDRESS OF THE FILE
+FILEND   EQU   19            ENDING DISK ADDRESS OF THE FILE
+FILESIZE EQU   21            FILE SIZE
+FILSECMP EQU   23            FILE SECTOR MAP INDICATOR
+FILEDATE EQU   25            FILE CREATION DATE
+FCBPTR   EQU   28            FCB LIST POINTER
+CURPOS   EQU   30            CURRENT POSITION
+CURRECNO EQU   32            CURRENT RECORD NUMBER
+DATINDEX EQU   34            DATA INDEX
+RNDINDEX EQU   35            RANDOM INDEX
+NAMWKBUF EQU   36            NAME WORK BUFFER
+CURDIRAD EQU   47            CURRENT DIRECTORY ADDRESS
+FIRSTDIR EQU   50            FIRST DELETED DIRECTORY POINTER
+SCRBYTES EQU   53            SCRATCH BYTES
+SPCOMFLG EQU   59            SPACE COMPRESSION FLAG
+SECBUF   EQU   64            SECTOR BUFFER
+
+.------------------------------------------------------------------
+.----------------   END EQUATES FOR FCB   -------------------------
+.------------------------------------------------------------------
+    
+    
+.------------------------------------------------------------------
+.-------------    STANDARD ENTRY POINTS    ------------------------
+.------------------------------------------------------------------
+ 
+ 
+FMSINIT  JMP   COLDST        FMS INITIALIZATION ENTRY POINT
+
+FMSCLS   JMP   CLOSE      FMS CLOSE ENTRY POINT
+
+FMSCALL  JMP   FMSENTRY      FMS CALL ENTRY POINT
+
+ 
+.------------------------------------------------------------------
+.------------------------     END     -----------------------------
+.------------------------------------------------------------------
+ 
+ 
+ 
+.-------------------------------------------------------------------
+.----------------   VARIABLE STORAGE AREA   ------------------------
+.-------------------------------------------------------------------
+ 
+ 
+FCBBP    RMB   2             FCB BASE POINTER
+FCBCADR  RMB   2             CURRENT FCB ADDRESS
+LD40D    RMB   2
+SAVLNK   RMB   2
+LD411    RMB   1
+LD412    RMB   1
+DIR_ADDRESS RMB   1          ADDRESS OF START OF DIRECTORY - TRACK
+DIR_SECTOR RMB   1                                         - SECTOR
+LD415    RMB   2
+LD417    RMB   1
+LD418    RMB   2
+LD41A    RMB   1
+LD41B    RMB   2             PTR TO FREE SECTOR TABLE ENTRY
+LD41D    RMB   4*6           FREE SECTOR TABLE (ONE ENTRY PER DRIVE)
+VFLAG    FCB   $FF           VERIFY FLAG
+ 
+ 
+.------------------------------------------------------------------
+.----------------------     END     -------------------------------
+.------------------------------------------------------------------
+ 
+ 
+ 
+COLDST   LDX   #FCBBP        LOAD X WITH ADDRESS OF "FCBBP"
+         LDB   #$0A
+CLR10    CLR   0,X+
+         DECB
+         BNE   CLR10
+         LDX   #$05          DIRECTORY SECTOR NUMBER
+         STX   DIR_ADDRESS
+         STX   LD415
+         CLR   LD41A         CLEAR LD41A TO END OF 24 BYTE BUFFER
+CLEAR    LDX   #LD41B
+         LDB   #$1A
+CLEARX   CLR   $00,X+
+         DECB
+         BNE   CLEARX
+         PSHS  Y
+         LDX   #SYSFCB
+         LDB   #14
+         LDY   #32
+         SWI                 SEND_MESSAGE TO DELETE ALL FILES OPENED
+         FCB   41
+         CLRB
+         PULS  Y,PC
+
+CLOSE    LDX   FCBBP         LOAD X WITH FCB BASE POINTER
+         BEQ   CLEAR
+         LEAX  -$1C,X        POSN TO FCB START
+         STX   FCBCADR
+         PSHS  Y
+         LDB   #4
+         STB   FNCODE,X
+         JSR   CLFILE        CLOSE FCB
+         PULS  Y
+         BRA   CLOSE         ALWAYS CLOSE ALL FILES
+.         LDX   FCBCADR
+.         CLR   $02,X
+.         LDB   #$FF
+.         RTS
+
+FMSENTRY
+         PSHS  Y,B           SAVE REGISTERS
+         STX   FCBCADR         STORE ADDRESS OF FCB
+         CLR   ERORSTAT,X    CLEAR ERROR STATUS BYTE
+         LDB   FNCODE,X      LOAD FUNCTION CODE INTO B
+         BNE   IDOPTION      NOT READ/WRITE NEXT BYTE/CHARACTER
+         LDB   $02,X         LOAD ACTIVITY STATUS
+         BEQ   ER018         BRANCH IF NOT OPEN FOR READ/WRITE NEXT BYTE
+         CMPB  #$02          SEE IF FILE OPEN FOR WRITE
+         BEQ   FMSWRITE      BRANCH IF WRITE NEXT BYTE/CHARACTER
+         JSR   READ_BYTE     READ NEXT BYTE
+FINISH   LDX   FCBCADR         PREPARE TO EXIT
+         BCS   ERSET         CHECK FOR SOFTWARE ERROR
+         TST   PR1           WAS THERE A SYSTEM ERROR
+         BNE   FAILURE       BRANCH ON FAILURE
+         CLRB                .SET Z-BIT IN THE CONDITION CODE
+         PULS  Y,B           RE-INSTATE REGISTERS
+         RTS                 .EXIT FMS CALL ACTION
+
+FMSWRITE JSR   WRITE_BYTE         WRITE NEXT BYTE/CHARACTER
+         BRA   FINISH        EXIT WRITE NEXT BYTE/CHARACTER
+
+ER018    LDB   #$12          SYSTEM FILE STATUS ERROR
+         BRA   ERSET
+
+IDOPTION CMPB  #(OPTIONEND-OPTION)+>1 TEST IF OPTION VALID
+         BLS   VALFCODE      BRANCH IF FUNCTION CODE VALID
+         LDB   #$01          ILLEGAL FMS FUNCTION CODE ENCOUNTERED
+         BRA   ERSET
+
+VALFCODE DECB                .RESET B TO RANGE 0 THRU 27
+         ASLB                .CHANGE B TO 2 BYTE MULTIPLES
+         LDX   #OPTION       LOAD X WITH THE ADDRESS OF THE JUMP LIST
+         JSR   [B,X]         JUMP USING JUMP LIST "OPTION"
+         LDX   FCBCADR         RESET X TO POINT TO CURRENT FCB ADDRESS
+         BCC   FAILURE       IF NO ERROR DON'T RESET ERROR STATUS
+ERSET    STB   ERORSTAT,X    STORE ERROR STATUS BYTE
+FAILURE  TST   ERORSTAT,X    TEST ERROR STATUS BYTE
+         PULS  Y,B           RE-INSTATE STACK
+         RTS                 .EXIT LEAVING Z FLAGGING ERROR
+
+ 
+.----------------------------------------------------------------
+.-----------   OPTION JUMP LIST TABLE   -------------------------
+.----------------------------------------------------------------
+ 
+ 
+OPTION   FDB   ROPEN         OPEN FOR READ
+         FDB   WOPEN         OPEN FOR WRITE
+         FDB   UOPEN         OPEN FOR UPDATE
+         FDB   CLFILE        CLOSE FILE
+         FDB   RWFILE        REWIND FILE
+         FDB   DOPEN         OPEN DIRECTORY
+         FDB   GETIR         GET INFORMATION RECORD
+         FDB   PUTIR         PUT INFORMATION RECORD
+         FDB   RSSECT        READ SINGLE SECTOR
+         FDB   WSSECT        WRITE SINGLE SECTOR
+         FDB   ZZZZC         STORE DIRECTORY RECORD
+         FDB   DLFILE        DELETE FILE
+         FDB   RNFILE        RENAME FILE
+         FDB   ZZZZA         RESERVED FOR FUTURE SYSTEM USE
+         FDB   NSSECT        NEXT SEQUEN TIAL SECTOR
+         FDB   OSIREC        OPEN SYSTEM INFORMATION RECORD
+         FDB   GRSECT        GET RANDOM BYTE FROM SECTOR
+         FDB   PRSECT        PUT RANDOM BYTE INTO SECTOR
+         FDB   ZZZZB         OPEN FOR EXTEND
+         FDB   FNDRIVE       FIND NEXT DRIVE
+         FDB   POSNRN        POSITION TO RECORD N
+         FDB   BUREC         BACKUP ONE RECORD
+         FDB   ZZZZA         USE INTERNALLY BY READ A BYTE
+         FDB   ZZZZA         USE INTERNALLY BY READ A BYTE
+         FDB   FILE_LOCK     LOCK A RANDOM FILE
+         FDB   FILE_UNLOCK   UNLOCK A RANDOM FILE
+         FDB   WRITE_SECTOR  WRITE A SECTOR WITH FILE LOCK CHECK
+         FDB   NEWRND        OPEN NEW RANDOM FILE
+         FDB   FMS320        CHECK FILE LOCK
+OPTIONEND
+  
+ 
+.---------------------------------------------------------------
+.--------------------     END     ------------------------------
+.---------------------------------------------------------------
+ 

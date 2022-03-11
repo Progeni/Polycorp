@@ -1,0 +1,135 @@
+DLFILE   JSR   MOVNAM
+         JSR   FINDP12
+         BEQ   ERA02
+         JSR   LD917
+         BCS   LDC39
+         JSR   LDB95
+         BCS   LDC39
+         LDX   FCBCADR
+         LDA   $0F,X
+         BITA  #$80
+         BNE   ERB11
+         BITA  #$40
+         BNE   ERA12
+         JSR   FRESEC         X POINTS TO FREE SECTOR TABLE
+         LDX   LD41B
+         LDD   $02,X
+         BNE   LDC05
+         LDX   FCBCADR
+         LDD   $11,X
+         BEQ   LDC31
+         LDX   LD41B
+         STD   $00,X
+         BRA   LDC19
+
+LDC05    LDX   FCBCADR
+         JSR   RDSECT         READ A SECTOR
+         BCS   LDC39
+         LDX   FCBCADR
+         LDD   $11,X
+         BEQ   LDC31
+         JSR   LDBB9
+         BCS   LDC39
+LDC19    LDX   FCBCADR
+         LDD   $13,X
+         LDX   LD41B
+         STD   $02,X
+         LDX   FCBCADR
+         LDD   $15,X
+         LDX   LD41B
+         ADDD  $04,X
+         STD   $04,X
+LDC31    JSR   LDBA7
+         BCS   LDC39
+         JSR   RWSIR          REWRITE SYSTEM INFO REC
+LDC39    RTS                  .EXIT
+
+ERA02    LDB   #2
+         SEC
+         RTS
+
+ERB11    LDB   #$0B          THE FILE OR DISK IS WRITE PROTECTED
+         BRA   LDC40
+
+ERA12    LDB   #$0C          THE FILE IS PROTECTED - FILE NOT DELETED
+LDC40    SEC
+         RTS                  .EXIT
+
+LDC43    LDD   CURPOS,X      CURRENT T/S ADDRESS
+         INCB
+         CMPB  $3C,X
+         BLS   LDC4F
+         LDB   #$01
+         INCA
+LDC4F    CMPD  $13,X
+         BNE   LDC63
+         LDA   $37,X
+         CMPA  #$FF
+         BEQ   LDC63
+         INCA
+         STA   $37,X
+         CLC
+         RTS                  .EXIT
+
+LDC63    BSR   LDC98
+         BCS   LDC97
+         LDX   FCBCADR
+         LDA   $3A,X
+         ADDA  #$03
+         BNE   LDC87
+         LDD   $1E,X
+         CMPD  $11,X
+         BEQ   LDC7F
+         LDB   #$17          SECTOR MAP OVERFLOW - DISK TOO SEGMENTED
+         SEC
+         RTS                  .EXIT
+
+LDC7F    LDD   $40,X
+LDC82    STD   $38,X
+         LDA   #$04
+LDC87    STA   $3A,X
+         LDD   $13,X
+         STD   $35,X
+         LDA   #$01
+         STA   $37,X
+         ANDCC #$FE
+LDC97    RTS                  .EXIT
+
+LDC98    LDD   $38,X
+         JSR   RDSECT         READ A SECTOR
+         BCS   LDC97
+         LDX   FCBCADR
+         TFR   X,Y
+         LDB   $3A,X
+         NOP
+         ABX
+         LDB   #$03          LOAD B WITH A COUNT OF 3
+LDCAC    LDA   $35,Y
+         LEAY  $01,Y         INCREMENT Y BY 1
+         STA   $40,X
+         LEAX  $01,X         INCREMENT X BY ONE
+         DECB                .DECREMENT B BY 1
+         BNE   LDCAC
+         JSR   WSSECT
+         BCC   LDC97
+         JMP   LDBC1
+
+LDCC1    JSR   OSIREC
+         JSR   NXTSEC        READ IN NEXT SECTOR
+        LBCS   LDD0F
+         LDX   FCBCADR
+         CLRA
+         CLRB
+         STD   $20,X
+         LDA   $67,X
+         STA   $3C,X
+         CLRB
+LDCD8    CLR   $40,X
+         LEAX  $01,X         INCREMENT X BY ONE
+         DECB                .DECREMENT B BY 1
+         BNE   LDCD8
+         LDX   FCBCADR
+         ANDCC #$FE
+         RTS                  .EXIT
+
+

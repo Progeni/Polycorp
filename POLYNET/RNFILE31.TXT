@@ -1,0 +1,220 @@
+MASNUM   EQU   $F002
+RNFILE   JSR   FINDP12       IS THE FILE IN USE
+         BEQ   ERR02
+         BSR   LDB63
+         JSR   FDIRET        FIND MATCHING DIR ENTRY
+         BCS   LDB5D         BRANCH IF ERROR
+         BEQ   ERR03         BRANCH IF FILE ALREADY EXIST
+         LDX   FCBCADR
+         LDB   #$0B          LOAD B WITH COUNT OF 11
+COPY11   LDA   $24,X         NAME WORK BUFFER
+         STA   FILENAME,X
+         LEAX  $01,X         INCREMENT X BY ONE
+         DECB                .DECREMENT B BY 1
+         BNE   COPY11
+         BSR   LDB93
+         BCS   LDB5D
+         LDX   FCBCADR
+         LDA   ATTRIB,X      FILE ATTRIBUTE
+         BITA  #$80          WRITE PROTECTED
+         BNE   ER011
+         BITA  #$40
+         BNE   ERR12
+         BSR   LDB63
+        LBRA   LDBAE
+
+ERR02    LDB   #2
+         SEC
+         RTS
+
+ERR03    LDB   #$03          THE FILE SPECIFIED ALREADY EXISTS
+         ORCC  #$01
+LDB5D    RTS                  .EXIT
+
+ERR12    LDB   #$0C          THE FILE IS PROTECTED - FILE NOT DELETED
+         ORCC  #$01
+         RTS                  .EXIT
+
+LDB63    LDX   FCBCADR
+         LDA   #$0B
+         STA   RETRYC
+LDB6B    LDA   FILENAME,X
+         LDB   $35,X
+         STA   $35,X
+         STB   FILENAME,X
+         LEAX  $01,X         INCREMENT X BY ONE
+         DEC   RETRYC
+         BNE   LDB6B
+         LDX   FCBCADR
+         LDA   $0C,X
+         BNE   LDB8F
+         LDB   #$03          LOAD B WITH A COUNT OF 3
+LDB85    LDA   $3D,X
+         STA   $0C,X
+         LEAX  $01,X         INCREMENT X BY ONE
+         DECB                .DECREMENT B BY 1
+         BNE   LDB85
+LDB8F    LDX   FCBCADR
+         RTS                  .EXIT
+
+LDB93    BSR   LDB63
+LDB95    JSR   FDIRET       FIND MATCHING DIR ENTRY
+         BCS   LDBA1        BRANCH IF ERROR
+         BNE   ER004
+         LDX   FCBCADR
+         BSR   TESTATR
+         CLC
+         BEQ   LDBA1
+         SEC
+LDBA1    RTS                  .EXIT
+
+TESTATR  LDD   MASNUM       IF MASTER NUMBER IS ZERO,
+         CMPD  #0           IS IT ZERO
+         BEQ   PASEXT       DO NOT CHECK PROTECTION
+         LDB   ATTRIB,X     CHECK SYSTEM BIT
+         BITB  #$08
+         BNE   SYSNUM
+         BITB  #$20           TEST READ ATTRIBUTE
+         BEQ   PASEXT
+         TST   SPUFG
+         BEQ   PASST
+         LDD   SPASS        CHECK WITH SUPER PASSWORD FIRST
+         CMPD  USERPSWD     COMPARE WITH USER PASSWORD
+         BEQ   PASEXT       BRANCH IF SUPER USER
+PASST    LDA   16,X
+         LDB   24,X
+         CMPD  USERPSWD     COMPARE WITH USER PASSWORD
+         BEQ   PASEXT
+PASTST   LDB   #17            FILE IS PROTECTED,ACCESS DENIED
+PASEXT   RTS
+
+SYSNUM   LDA   16,X
+         LDB   24,X
+         CMPD  MASNUM
+         BEQ   SYS1
+         LDB   #36
+SYS1     RTS
+
+ER004    LDB   #$04          THE SPECIFIED FILE COULD NOT BE FOUND
+         ORCC  #$01
+         RTS                  .EXIT
+
+LDBA7    LDX   FCBCADR
+         LDA   #$FF
+         STA   FILENAME,X
+LDBAE    JSR   ZZZZC
+         LDX   FCBCADR
+         LDA   #$00
+         STA   $02,X
+         RTS                  .EXIT
+
+LDBB9    STD   $40,X
+         JSR   WSSECT
+         BCC   LDBD5
+LDBC1    BITB  #$40
+         BNE   ERA11
+         BITB  #$80
+         BEQ   ERRSET
+         LDB   #$10          DRIVES NOT READY
+         BRA   ERRSET
+
+ERA11    LDB   #$0B          THE FILE OR DISK IS WRITE PROTECTED
+         BRA   ERRSET
+
+         LDB   #$0A          DISK FILE WRITE ERROR
+ERRSET   ORCC  #$01          SET C
+LDBD5    RTS                  .EXIT
+
+
+*  FN NO : 28
+*    OPEN NEW RANDOM FILE
+
+NEWRND
+         JSR   WOPEN         OPEN AN OUTPUT FILE
+         BCS   NEWRERR       BRANCH IF ERROR
+         LDA   #2
+         STA   ACTSTAT,X     SET ACTIVITY STATUS TO 2
+         STA   FLSMAP,X      SET FILE SECTOR MAP
+         JSR   WRBYTE        WRITE A BYTE
+         BCS   NEWRERR
+         JSR   CLFILE
+         BCS   NEWRERR
+         JSR   ROPEN
+         BCS   NEWRERR
+         LDA   #1
+         STA   ACTSTAT,X     SET ACTIVITY STATUS TO 1
+NEWRERR  RTS                 RETURN CARRY BIT TO CALLER
+*  OUTPUT RANDOM RECORD
+*  FN 27
+
+         ORG   $C980
+PUTRND
+         LDX   FCBCADR       LOAD FCB ADDR
+         LEAX  $44,X         POINT TO BUFFER AREA
+         LDY   #$C880        MOVE BUFFER TO SYSTEM FCB
+         LDB   #252
+         JSR   MOVE          MOVE ^X TO ^Y
+         JSR   POSNRN        POSITION TO REC N
+         BCC   PUTR1         BRANCH IF NO ERROR
+         CMPB  #24           NON EXISTENCE RECORD ?
+         BNE   PUTERR
+         BSR   EXTEND        EXTEND TO THE REQUIRED REC
+         BCS   PUTERR        EXIT IF ERROR
+         LDX   FCBCADR
+         CLR   SECBUF,X      CLEAR FORWARD LINK
+         CLR   SECBUF+1,X
+         LDD   CURRNO,X      CURRENT RECORD NUMBER
+         SUBD  #1            RESTORE LOGICAL REC COUNT
+         STD   SECBUF+2,X    STORE AS LOGICAL REC NO
+         DEC   ACTSTAT,X     RESTORE ACTIVITY STATUS TO 1
+         LDD   FILEND,X      FILE END
+         STD   CURPOS,X      STORE AS CURRENT POSITION
+PUTR1    LEAY  $44,X
+         LDX   #$C880        MOVE BUFFER BACK TO FCB
+         LDB   #252
+         JSR   MOVE          MOVE FROM ^X TO ^Y
+         JMP   WSSECT        WRITE OUT THE SECTOR,THEN RETURN
+PUTERR   SEC
+         RTS
+
+
+EXTEND   LDD   LD40F         LOAD POINTER TO SECTOR MAP
+         SUBD  FCBCADR       GET INDEX BYTE OF SECTOR MAP
+         SUBD  #SECBUF       NOW INDEX BYTE IN B
+         LDX   LD40F
+         LDY   0,X           LAST ENTRY OF SECTOR MAP
+         LDA   2,X           PICK UP CONTIGUOUS SECTOR
+         LDX   FCBCADR
+         STA   $37,X         CONTIGUOUS SECTOR
+         STB   $3A,X         INDEX BYTE OF SECTOR MAP
+         LDD   CURPOS,X      SECTOR MAP ADDR
+         STD   $38,X
+         STY   $35,X
+         LDX   FCBCADR
+         LDD   $20,X         GET LOGICAL REC NUMBER
+         ADDD  #2            ADD 2 SECTOR COUNT
+         SUBD  FLSIZE,X      SUB FROM FILE SIZE
+         PSHS  D             D HAS NO OF SECTOR TO EXTEND
+         JSR   LD917         READ IN SIR IF DISK CHANGED
+         BCS   RNEXIT        ERROR
+         JSR   ENDFIL        POSITION TO END OF FILE
+         BCS   RNEXIT        BRANCH IF ERROR
+         LDD   SECBUF+2,X
+         STD   CURRNO,X
+EXRND1   JSR   NOTFST        RESERVE NEXT SECTOR
+         BCS   RNEXIT        BRANCH IF ERROR
+         PULS  D             GET COUNT
+         SUBD  #1
+         BEQ   EXRND2        BRANCH IF FINISHED EXTEND
+         PSHS  D
+         BRA   EXRND1
+EXRND2   JSR   LDC98         UPDATE SECTOR MAP
+         BCS   EXRNEX        ERROR
+         JSR   ZZZZC         REWRITE DIR ENTRY
+         BCS   EXRNEX        ERROR
+         JSR   RWSIR         REWRITE SYSTEM INFO REC
+EXRNEX   RTS
+
+RNEXIT   PULS  X,PC          RETURN ERROR CODE
+
+         ERRIF *>$CA60

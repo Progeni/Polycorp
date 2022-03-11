@@ -1,0 +1,694 @@
+***************************************************************************
+
+.NAME    :      BEEP         .FN 3
+.FUNCTION:      Sound Generation
+.ON ENTRY:      D = Pitch, X = Duration
+.DESTROYS:      D
+.DESCRIPTION:   Sound for X centiseconds where D = 502400/freq-1
+
+PITCH    EQU   UD
+DURATION EQU   UX
+BEEP:
+         TST   CLOCKFLG
+         LBEQ  ERROR_SET
+         LDX   PITCH,U
+         BEQ   BEEP_END
+         LDA   #$82
+         STA   TIMCR31
+         CLRD
+         SUBD  DURATION,U
+         STD   DURATION,U
+         LDD   TIMER1
+         PSHS  D,X
+         STX   TIMER3
+LLBEEP1  STX   2,S
+         LDX   TIMER3
+         CMPX  2,S
+         BLO   LLBEEP1
+         LDD   0,S
+         LDY   TIMER1
+         STY   0,S
+         SUBD  0,S
+         BGE   LLBEEP2
+         ADDD  #100
+LLBEEP2  ADDD  DURATION,U
+         STD   DURATION,U
+         BLT   LLBEEP1
+         LEAS  4,S
+         CLR   TIMCR31
+BEEP_END RTS
+****************************************************************************
+.
+.NAME    : PAUSE             .FN 4
+.FUNCTION: Pause if Pause Key pressed.
+.ON EXIT : A contains key pressed after "PAUSE"
+.CALLS   : CHRIN
+.DESTROYS: A,CC
+
+PAUSE:
+         LDA   #$FF
+         TST   PSEFLG        Pause key pressed?
+         BEQ   PAUSEND       No - return.
+         JMP   PSE_ENT       Yes - wait till another key pressed.
+
+
+
+*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+CHAR_OUT
+                             .FN 5
+         LDA   UB,U          GET THE CHAR FROM THE USERS A REG.
+         JMP   VDU           AND RETURN VIA VDU
+
+*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+WRITE_CHAR_TO_SPECIFIED_POS:
+                             .FN 6 ($6)
+         BSR   VALIDCUR      CHECK FOR VALID CURSOR SPECIFIED
+         JSR   REALPOS
+         LDA   UB,U          GET INPUT CHARACTER
+         STA   0,X
+         RTS
+
+
+*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+INCHAR_STRING
+                             .FN 7 ($7)
+                             .READS KEYBOARD ON THE FLY
+                             .FOR BASIC INCHAR$ FUNCTION
+         SEI                 DISABLE INTERRUPTS
+         CLR   UB,U          RETURN NULL IF NO CHARACTER
+         TST   BUFSTAT       CHARACTER WAITING?
+         BEQ   ICS_END       NO - RETURN
+         LDA   BUFCHAR       YES - GET CHARACTER
+         CLR   BUFSTAT           - ACKNOWLEDGE
+PAUSEND  STA   UB,U          PASS TO USER
+ICS_END  RTS
+
+
+*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+VALIDCUR LDD   UY,U          GET SCREEN CURSOR POSITION
+SCRLIMCHK
+         CMPB  #40           IS HORZ PASS POSITION 39
+         BHS   CSTSER        YES BRANCH TO ERROR ROUTINE
+         CMPA  #23           IS VERT PASS POSITION 23
+         BHI   CSTSER        YES BRANCH TO ERROR ROUTINE
+         RTS
+
+COPY_SCN_TO_STRING
+                             .FN 8
+
+         BSR   VALIDCUR      CHECK FOR VALID CURSOR POS SPECIFIED
+         JSR   REALPOS       GET PHYSICAL SCREEN POS
+         LDD   ENDBASE,Y     LOAD END OF PHYSICAL SCREEN ADDR
+         PSHS  D             SAVE IT ON STACK
+         LDY   UD,U          GET DESTINATION ADDRESS
+. START MOVING STRING
+CSTS1    LDD   UX,U          GET LENGTH
+         BEQ   CSTEXIT       FINISHED--BRANCH TO EXIT
+         SUBD  #1
+         STD   UX,U          TRY AGAIN
+         CMPX  0,S           IS IT END OF SCREEN ?
+         BHI   CSTSER        YES THEN THERE IS AN ERROR
+         LDA   0,X+          LOAD THE CHAR
+         BNE   CSTS2         BRANCH IF NOT NULL
+         LDA   #" "          OTHERWISE CHANGE IT TO SPACE
+CSTS2    CMPY  #SYSTEM       IS DESTINATION ADDR OVERLAP SYSTEM ?
+         BHI   CSTSER        YES THEN THERE IS AN ERROR
+         STA   0,Y+          STORE IT
+         BRA   CSTS1
+
+CSTSER   JMP   ERROR_SET
+
+CSTEXIT  PULS  D,PC          RESTORE STACK AND RETURN
+
+*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+ABS_CURSOR
+                             .FN 09 ($9)
+         LDD   UD,U          GET REQD POSN
+         BRA   AC1
+
+*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+RELATIVE_CURSOR
+                             .FN 10 ($A)
+         LDD   CURSOR,Y      GET CURRENT CURSOR POS
+         ADDB  UB,U          ADD HORIZONTAL
+         ADDA  UA,U          ADD VERTICAL
+AC1      BSR   SCRLIMCHK     CHECK IF ON ALLOWED SCREEN AREA
+         STD   CURSOR,Y      OK, SO STORE IT
+         LDA   SPLIT,Y
+         BNE   CHKCUR
+         RTS                 DONE
+
+*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+READ_CURSOR_POS
+                             .FN 11 ($B)
+         LDD   CURSOR,Y      READ POSITION OF CURSOR
+         STD   UD,U          PUT INTO USERS D-REG.
+         RTS                 DONE
+
+*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+READ_CURSOR_CHAR
+                             .FN 12 ($C)
+         JSR   CURRCUR       FIND THE REAL MEMORY LOCATION OF THE CURSOR
+                           . (RESULT IN X (AND D) REGISTERS)
+         LDB   ,X            GET THE CHAR
+         CLRA                MSB = 0
+         STD   UD,U          STORE THE CHAR IN USERS D REG.
+         RTS
+
+*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+.
+*********************************************************************
+.
+. NAME    :  SET_SCREEN_SPLIT_POINT .FN 13 ($D)
+. FUNCTION:  TO SPLIT THE CURRENT TELETEXT SCREEN INTO TWO PORTIONS
+. ON ENTRY:  UB REG CONTAINS THE NUMBER WHERE THE CURRENT SCREEN TO BE SPILT
+. ON EXIT :  NO CHANGE TO USER REGS
+. CALLS   :  REALPOS
+. DESCRIPTION: THE CURRENT TELETEXT SCREEN IS SPLIT INTO TWO PORTIONS
+.              ACCORDING TO THE INPUT REG B. THE TOP PORTION IS FROM
+.              LINE 0 TO B MINUS 1 AND BOTTOM PORTION IS FROM B TO
+.              LINE 23. IF REG B >23 ,IT WILL BE DEFAULT TO 0.
+.
+SET_SCREEN_SPLIT_POINT
+
+         LDA   UA,U          GET THE INPUT REG FROM UB
+         CMPA  #23           IS IT >23
+         BLS   INPTOK        BRANCH IF LESS THAN 24
+         CLRA                OTHERWISE DEFAULT TO 0
+INPTOK   STA   SPLIT,Y       STORE THE SPLIT POINT
+CHKCUR   CMPA  VERT,Y        COMPARE WITH VERT CURSOR
+         BLS   SETBOTM       BRANCH TO SET CURRENT SCREEN TO BOTTOM HALF
+. SET THE CURRENT SCREEN TO TOP HALF
+         CLR   TOP,Y
+         LDX   BEGBASE,Y     LOAD BEGIN OF PHYSICAL SCREEN
+         STX   BEGINS,Y      STORE AS BEGINS
+         DECA  
+         STA   BOTTOM,Y      LINE NUMBER - 1 IS THE BOTTOM OF TOP PORTION
+         LDB   #39           END OF LINE
+         JSR   REALPOS       GET PHYSICAL SCREEN ADDRESS
+         BRA   SPLTEXIT
+SETBOTM  CLRB
+         STA   TOP,Y         STORE TOP LINE OF BOTTOM PORTION
+         JSR   REALPOS       GET PHYSICAL SCREEN ADDRESS
+         STD   BEGINS,Y      STORE ADDRESS IN BEGINS
+         LDA   #23
+         STA   BOTTOM,Y      MAKE LINE 23 AS LAST LINE OF BOTTOM PORTION
+         LDD   ENDBASE,Y
+SPLTEXIT STD   ENDS,Y        ENDBASE IS ENDS ADDRESS OF BOTTOM PORTION
+         RTS
+
+*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+CLEAR_TELETEXT_SCREENS
+                             .FN 14 ($E)
+                             .UB,U < 0 TO CLEAR CURRENT SCREEN
+                             .     = 0 TO CLEAR TTXT1 LEAVING CURSOR IN CURRENT POSITION
+                             .     > 0 TO CLEAR TTXT2    "       "    "    "        "
+         LDA   UB,U
+         BLT   C_S_3         CURRENT (=-VE)
+         BNE   C_S_2
+         LDY   #TTXT1        TTXT1 (=0)
+         BRA   C_S_3
+C_S_2    LDY   #TTXT2        TTXT2 (=+VE)
+C_S_3    JMP   CLRSCN        CALL CLEAR SCREEN
+
+*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+SET_DISPLAY_MODE
+                             .FN 15 ($0F)
+                             .16 BIT VALUE IN D REG. (SOME MASKED)
+                           . A REG. = VIDEOA , B REG = VIDEOB
+. SAVE USER PORT
+.        LDB   VIDEOB        PIA REG
+.        ANDB  #%10000000    USER PORT BIT
+.        PSHS  B             SAVE
+         LDD   UD,U
+.        ANDB  #$7F          STRIP OFF BIT 7
+.        ORB   ,S+           COMBINE USER PORT
+         STA   VIDEOA        PLACE IN PIA
+         STB   VIDEOB
+         RTS                 RETURN
+
+*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+READ_DISPLAY_MODE
+                             .FN 16 ($10)
+                             .16 BIT VALUE RETURNED IN D REG. (SOME MASKED)
+                           . A REG. = VIDEOA , B REG. = VIDEOB
+         LDA   VIDEOA        BITS 8-15
+         ANDA  #$7E
+         LDB   VIDEOB        BITS 0-7
+         ANDB  #$7F
+         STD   UD,U
+         RTS
+
+*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+SET_CLOCK_ATTRIBUTES
+                             .FN 17 ($11)
+
+         LDB   UB,U          USER WANT TO STILL RUN?
+         STB   CLOCKFLG      STORE NEW CLOCK FLAG
+         BNE   SCA1          YES NO ACTION
+         LDA   #1            NO - STOP CLOCK
+         STA   TIMCR2        SELECT TIMCRI ACCESS AND
+         CLR   TIMCR31       STOP INTERRUPTS
+         BRA   SCA2          GO AND CHECK DISPLAY PART
+
+SCA1     LDA   #1            YES - START CLOCK
+         STA   TIMCR2        SELECT TIMCRI ACCESS
+         LDA   #CLOCKRUN     START CLOCK TIMER #1
+         STA   TIMCR31
+         LDD   #99           DIVIDE BY 100
+         STD   TIMER1        AND INITIALISE TIMER
+SCA2     LDA   #DIV1MHZ      RESELECT TIMCR3 ACCESS, AND INIT T2 TO PRODUCE 100 Hz
+         STA   TIMCR2
+         LDD   #5023         SET T2 TO DIVIDE BY 10000 (N=4999)
+         STD   TIMER2
+         LDB   UX,U          Pick up MS Byte of Time from caller
+         STB   TIME
+         LDD   UY,U          Now get LS 2 Bytes of time
+         STD   TIMELS
+         RTS                 DONE
+
+
+*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+
+RETURN_TIME
+                             .FN 18 ($12)
+         BSR   WOTSTIM
+         STD   UD,U
+         STX   UX,U
+         RTS
+
+
+*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+WAIT
+                             .FN 19 ($13)
+         BSR   WOTSTIM       START WITH CURRENT TIME
+         ADDD  UD,U          ADD WAIT TIME
+         PSHS  D             SAVE TARGET TIME
+WAIT2    BSR   WOTSTIM       READ CURRENT TIME
+         CMPD  ,S            TIME REACHED YET?
+         BNE   WAIT2         NO -
+         PULS  D,PC
+
+......................................................................
+
+WOTSTIM                      .WHAT IS TIME?
+         TST   CLOCKFLG      TIMER RUNNING?
+         LBEQ  ERROR_SET     NO! ERROR!
+         LDD   #99           READ TIMER AS REMAINING TIME
+         SEI                 DISABLE INTS
+         SUBD  TIMER1        AND CONVERT TO ELAPSED TIME
+         ADDD  TIMELS        ADD TIMEWORD
+         TFR   D,X           PUT LS INTO X
+         CLRB
+         ADCB  TIME          INCR MS BYTE
+         CLRA
+         EXG   D,X           PUT MS --> X,LS --> D.
+         CLI                 RE-ENABLE INTS
+         RTS
+
+
+.*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+SET_PAUSE_FLAG                .FN 20 ($14)
+          LDB   UB,U
+          STB   PSEFLG
+          RTS
+.*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+RS232IN                      .FN 23 ($17)
+         LDX   UX,U          POINTER TO BUFFER
+LLNCHR   LDY   #$0           TIME OUT COUNTER
+LLNRYET  LDA   ACIAS
+         BITA  #$01          IS A CHAR READY
+         BNE   LLGCHR
+         LEAY  1,Y
+         BNE   LLNRYET
+LLOUT1   BSR   LLOUT         TIMED OUT
+         LDD   #0
+         SUBD  UD,U
+         STD   UD,U
+         RTS
+LLGCHR   LDA   ACIAD         GET A CHARACTER
+         ANDA  #$7F
+         STA   ,X+
+         LDD   UD,U          COUNT OR DELIMITER?
+         BLT   LLINC
+         CMPB  -1,X          DELIMITER
+         BNE   LLNCHR
+LLOUT    TFR   X,D
+         SUBD  UX,U          RETURN NO OF CHARACTERS
+         STD   UD,U
+         RTS
+LLINC    ADDD  #1            COUNT
+         STD   UD,U
+         BLT   LLNCHR
+         BRA   LLOUT
+RS232OUT                     .FN 24 ($18)
+         LDX   UX,U
+LONCHR   LDY   #0
+LONRYET  LDA   ACIAS
+         BITA  #$02
+         BNE   LOPCHR
+         LEAY  1,Y
+         BNE   LONRYET
+         BRA   LLOUT1
+LOPCHR   LDA   ,X+
+         STA   ACIAD
+         LDD   UD,U
+         BLT   LOINC
+         CMPB  -1,X
+         BNE   LONCHR
+         BRA   LLOUT
+LOINC    ADDD  #1
+         STD   UD,U
+         BLT   LONCHR
+         BRA   LLOUT
+READ_IO                      .FN 46 ($2E)
+         LDX   UX,U          LOAD USER SPECIFIED ADDRESS
+         CMPX  #$E02F        END OF I/O
+         BHI   IOCHEK        DO NOT ALLOW ACCESS ABOVE E02F
+READ1    LDB   UB,U          READ 1 OR 2 BYTE
+         BNE   READ2         IT IS 2 BYTES
+         LDB   0,X
+         STB   UB,U          RETURN 1 BYTE TO USER
+         RTS
+READ2    LDD   0,X           READ 2 BYTES
+         STD   UD,U          RETURN 2 BYTES TO USER
+         RTS
+
+IOCHEK   CMPX  #$E800
+         BLO   IOERR         NO ACCESS TO ADLC,SWITCH MAP,PROTECT
+         CMPX  #$F000
+         BLO   READ1
+IOERR    JMP   NOTFOUND      RETURN WITH ILLEGAL SWI CALL
+
+
+WRITE_IO                     .FN 47 ($2F)
+         LDX   UX,U          LOAD USER SPECIFIED ADDR
+         CMPX  #$E02F        COMPARE WITH END OF IO
+         BHI   IOERR
+         LDD   UY,U          CHECK IF WRITE 1 OR 2 BYTES
+         BNE   WRITE2
+         LDB   UB,U
+         STB   0,X
+         RTS
+WRITE2   LDD   UD,U
+         STD   0,X
+         RTS
+
+.*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+TERMINAL_MODE                .FN 25 ($1A)
+         INC   TERMFLG       SWITCH TO TERMINAL MODE
+         LDX   #STRBUF
+         STX   SQPTR
+         STX   EQPTR
+         CLR   TTXTF,Y       SHIFT INTO ASCII MODE
+         LDA   #3            RESET ACIA
+         STA   ACIAS
+         LDD   UX,U          GET WORD SIZE,PARITY ON/OFF FROM USER
+         ANDB  #%00011100
+         ORB   #%10000001    SET RECEIVE INTERUPT ON
+         STB   ACIAS
+         LDD   UD,U          GET BAUD RATE
+         STB   BAUDRATE      STORE INTO PROGRAMMABLE BAUD RATE REG
+.   NOW WE ARE READY TO RUN AS TERMINAL
+         
+TERM1    JSR   CHRIN         WAIT FOR A CHAR FROM KEYBOARD OR ACIA
+         TSTA                TEST TO SEE WHERE IT IS COME FROM
+         BEQ   TERM3         BRANCH IF IT IS FROM ACIA
+         TST   CTRLFLG       IS IT ALREADY IN CTRL MODE ?
+         BEQ   TERM5         BRANCH IF NOT
+         CLR   CTRLFLG
+         CMPA  #'|'
+         BEQ   TERM2
+         ANDA  #%00011111    MAKE IT A CTRL CHAR
+         BRA   TERM2
+TERM5    CMPA  #'|'          CTRL CHAR ?
+         BNE   TERM2
+         STA   CTRLFLG       SHIFT INTO CTRL MODE
+         BRA   TERM1
+TERM2    LDB   ACIAS         OTHERWISE OUTPUT THIS CHAR TO ACIA
+         BITB  #02
+         BEQ   TERM2         BRANCH IF NOT READY
+         STA   ACIAD         STORE IN DATA REG
+TERM3    LDX   SQPTR         START OF QUEUE
+         CMPX  EQPTR
+         BEQ   TERM1         GO BACK TO THE START
+         SEI
+         LDD   CHRCOUNT
+         SUBD  #1
+         STD   CHRCOUNT
+         CLI
+         LDA   0,X+
+         ANDA  #$7F
+         CMPX  #ENDBUF       IS IT AT END OF BUFFER
+         BLO   TERM4
+         LDX   #STRBUF
+TERM4    STX   SQPTR
+         JSR   VDU           PUT ONTO THE SCREEN
+         BRA   TERM3
+
+*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+SELECT_STANDARD_MAP2         .FN 26 ($1A)
+         LDY   #DATRAM+8     POINT TO UPPER HALF OF DAT
+         LDX   #MAPTBL+8
+         BSR   WRITEMAP      WRITE TO MEMORY MAP 2
+         BRA   SELECT_MEMORY_MAP_TWO
+*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+SELECT_MEMORY_MAP_ONE
+                             .FN 27 ($1B)
+         STA   MAPONE        $E060
+         RTS
+
+*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+SELECT_MEMORY_MAP_TWO
+                             .FN 28 ($1C)
+         STA   MAPTWO        $E070
+         RTS
+
+*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+WRITE_TO_MEMORY_MAP_TWO
+                             .FN 29 ($1D)
+         LDY   #DATRAM+8     POINT TO THE UPPER HALF OF THE DAT
+         LDX   UD,U          POINT TO THE EIGHT BYTES
+         CMPX  #SYSTEM-8      OUT OF RANGE ?
+         LBHS  ERROR_SET     IF OUT OF RANGE SET ERROR
+WRITEMAP:LDA   ,X+           WRITE THE DATA TO MAP 2
+         COMA                COMPLEMENT FOR TTL RAM ( INVERTING !!! )
+         STA   ,Y+
+         CMPY  #DATRAM+16    DONE ?
+         BLO   WRITEMAP      REPEAT FOR ALL EIGHT BYTES
+         RTS
+
+*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+SELECT_TTXT1_OR_TTXT2
+                             .FN 30 ($1E)
+         LDX   #TTXT2
+         LDA   UB,U          B<>2 IF TTXT1 , B=2 IF TTXT2
+         CMPA  #02
+         BEQ   STTW1         BRANCH IF TTXT2
+         LDX   #TTXT1        SET TTXT1
+STTW1    STX   CURSVARS      STORE THE POINTER TO THE SCREEN VARS
+STTW3    RTS
+
+*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+SELECT_SINGLE_HEIGHT
+                             .FN 31 ($1F)
+         LDA   KEYBDC
+         ORA   #%00111100  ($3C)  SET BIT 3 HIGH (I.E. CB2 HIGH)
+         BRA   SDH2
+
+*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+SELECT_DOUBLE_HEIGHT
+                             .FN 32 ($20)
+         LDA   KEYBDC
+         ANDA  #%11110111  ($F7)   SET BIT 3 LOW (I.E. CB2 LOW)
+SDH2     STA   KEYBDC
+         RTS
+
+*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+SELECT_TOP_PAGE
+                             .FN 33 ($21)
+         LDA   SPAREC
+         ANDA  #%11110111  ($F7)  SET BIT 3 LOW (I.E. CA2 LOW)
+         BRA   SBP2
+
+*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+SELECT_BOTTOM_PAGE
+                             .FN 34 ($22)
+         LDA   SPAREC
+         ORA   #%00111100  ($3C)  SET BIT 3 HIGH (I.E. CA2 HIGH)
+SBP2     STA   SPAREC
+         RTS
+
+*++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+*********************************************************************
+.
+. NAME    : SET AUTO WRAP    .FN 35 ($23)
+. FUNCTION:
+. ON ENTRY:
+. ON EXIT :
+. CALLS   :
+. DESTROYS:
+. DESCRIPTION:
+.
+SET_AUTO_WRAP:
+         LDB   UB,U
+         STB   WRAPFLG
+         RTS
+*********************************************************************
+.
+. NAME    : RC DECODER       .FN 36 ($24)
+. FUNCTION:
+. ON ENTRY:
+. ON EXIT :
+. CALLS   :
+. DESTROYS:
+. DESCRIPTION:
+.
+.RC_DECODER
+.
+.         BSR   WTLO          Wait till port low
+.         LDA   #200          wait until 3 msec of low to confirm frame sync signal
+.WTSYNC   TST   VIDEOA        15 uSec loop
+.         BMI   RC_DECODER    High! try next pulse to see if it is sync
+.         DECA
+.         BNE   WTSYNC        Frame sync detect loop
+.         LDX   UD,U          Must be sync.Pick up pointer to 1 measurement
+.         LDD   #5882         5882 x 17 uSec = 100 mSec
+.WTHI     TST   VIDEOA        Wait for high - Timeout if not high in 100 mSec
+.         BMI   INITTMR       Got first high after sync pulse,Set timer & GO
+.         SUBD  #1            17uSec loop
+.         BNE   WTHI
+.RC_ERR   JMP   ERROR_SET     Error - Input is permanently(100 mSec) low
+.INITTMR  LDD   #(DIV1MHZ<<8)+$12 Timer for continuous,non Interrupt count on gate
+.         STA   TIMCR2        Select timer 3
+.         STB   TIMCR31       Set timer 3 mode
+..
+.DECLP1   CMPX  #SYSTEM       Check pointer
+.         BHS   RC_ERR        Out of user area!
+.         LDD   #2999         Set 3 milliseconds
+.         STD   TIMER3
+.         BSR   WTLO          Wait for end of channel/frame sync pulse
+.DELCLP2  LDA   TIMSTAT
+.         BITA  #$04          Timer 3 time out?
+.         BEQ   RCRTN         Yes Must be frame sync -DONE
+.         TST   VIDEOA        Port gone high yet(end of channel)
+.         BPL   DELCLP2       No keep measuring time.
+.         LDD   #2999         Yes Calculate elapsed time
+.         SUBD  TIMER3
+.         STD   0,X++         Store to user
+.         BRA   DECLP1        Go and measure next channel
+..
+.WTLO     CLRA                Set time out in this routine to 255 x 15 = 3.8 mSec
+.WTLOLP   DECA                 15 uSec loop
+.         BEQ   RC_ERR        Time out on positive sync pulse
+.         TST   VIDEOA        Gone low yet?
+.         BMI   WTLOLP        No-loop.
+.RCRTN    RTS                 YES RETURN
+.
+.
+*********************************************************************
+.
+. NAME    : TEST EXIT FLAG       .FN 37 ($25)
+. FUNCTION:
+. ON ENTRY:
+. ON EXIT :
+. CALLS   :
+. DESTROYS:
+. DESCRIPTION:
+.
+TEST_EXIT_FLAG
+         LDB   EXITFLG
+         CLR   EXITFLG
+         STB   UB,U
+         RTS
+.
+*********************************************************************
+.
+. NAME    : RELINQUISH POLYCORP MODE  .FN 38 ($26)
+. FUNCTION:
+. ON ENTRY:
+. ON EXIT :
+. CALLS   :
+. DESTROYS:
+. DESCRIPTION:
+.
+.RELINQUISH_POLYCORP_MODE
+.        CLR   PCORPFLG
+.        RTS
+.
+*********************************************************************
+.
+. NAME    : CONVERT NUM TO BIT MASK   .FN 39 ($27)
+. FUNCTION:
+. ON ENTRY:
+. ON EXIT :
+. CALLS   :
+. DESTROYS:
+. DESCRIPTION:
+.
+.CONVERT_NUM_TO_BIT_MASK
+.         LDD   UD,U
+.         JSR   MASK
+.         STD   UD,U
+.         RTS
+.
+*********************************************************************
+.
+. NAME    : FILE MANAGEMENT CALL      .FN 41 ($29)
+. FUNCTION:
+. ON ENTRY: X POINTS TO FCB
+. ON EXIT : ERROR BYTE OF FCB CONTAINS IDENTITY OF POLY
+. CALLS   :
+. DESTROYS:
+. DESCRIPTION: THIS ROUTINE IS ESSENTIALLY SAME AS SENDING MESSAGE
+.              TO MINIMASTER EXCEPT THE 2nd BYTE X POINTS TO CONTAIN
+.              POLY IDENTITY.
+.
+FMSCALL
+         LDX   UX,U        LOAD FCB POINTER
+         LDD   POLYNUMBER
+         STD   $1C,X
+         JMP   SEND_MSG_TO_MASTER
+
+*********************************************************************
+.
+. NAME    : SET BREAK POINT FLAG      .FN 42 ($2A)
+. FUNCTION:
+. ON ENTRY:
+. ON EXIT :
+. CALLS   :
+. DESTROYS:
+. DESCRIPTION:
+.
+SET_BREAKPOINT_FLAG
+         INC   BKPTFLG
+         RTS
+
+***********************************************************************

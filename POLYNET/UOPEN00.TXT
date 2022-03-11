@@ -1,0 +1,33 @@
+.
+. FN 3 OPEN FOR UPDATE
+.
+UOPEN    JSR   ROPEN         TRY READ OPEN FIRST
+         BCS   ZBEXT         BRANCH IF ERROR OCCURRED
+         JSR   NXTSEC        READ IN FIRST SECTOR
+         BCS   ZBEXT         BRANCH IF ERROR
+         LDA   #$03
+         BRA   SECAT         SET ACTIVITY STATUS TO 3 AND RETURN
+
+
+. FN 19 OPEN FOR EXTEND
+.
+ZZZZB    JSR   ROPEN        TRY OPEN FOR READ
+         BCS   ZBEXT        BRANCH IF ERROR
+ENDFIL   LDX   FCBCADR
+         LDA   ATTRIB,X     LOAD ATTRIBUT BYTE
+         BITA  #$80         WRITE PROTECTED
+         BNE   ER011
+         LDD   FILEND,X
+         JSR   RDSECT       READ LAST SECTOR
+         BCS   ZBEXT        BRANCH IF ERROR
+         LDA   #$02
+SECAT    LDX   FCBCADR
+         STA   ACTSTAT,X    SET ACTIVITY STATUS
+         CLC
+ZBEXT    RTS                  .EXIT
+
+ER011    LDB   #11           THE FILE OR DISK IS WRITE PROTECTED
+         SEC
+         RTS                  .EXIT
+
+

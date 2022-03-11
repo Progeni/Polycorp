@@ -1,0 +1,33 @@
+.POPSM30       28 7 82       COMBINED WITH MINMST70 TO GIVE POLYNET 2.0
+.POPSM30       2-6-82        NEW OPERATING SYS
+.                            HANDLE ALL FMS CALL FOR POLY
+.                            ALLOW FILE LOCK
+.POPS802       13.5.81       8" DISK OPERATING SYSTEM
+.POPS803       18.5.81        JUMP TO SWARMS ON DISK ERROR
+.
+SECTORS  EQU   16            15/SIDE FOR 8" DISK
+RATE     EQU   0             06 MSEC INTERVALS FOR 8" DISK
+.
+         ORG   $C600
+
+LC600    BRA   CONT
+LC602    FCB   BASE+3,".",BASE+2,".",BASE+0
+CONT     BRA   LC607
+FLEXTITL FCB   "OPSYS - Version 3.2.0 - Jul 1983",EOT
+.
+CONTINUE EQU   *
+BASE     EQU   $80
+.
+         LIB   0.OPSA30
+         LIB   0.DLFILE30
+         LIB   0.BUREC31
+         LIB   0.OPSC31
+         LIB   0.ROPEN30
+         LIB   0.WOPEN30
+         LIB   0.NSSECT30
+         LIB   0.CLFILE30
+         LIB   0.UOPEN00
+         LIB   0.RNFILE31
+         LIB   0.TRKBUF30
+         LIB   0.DRIVER32
+         END   START

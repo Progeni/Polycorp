@@ -1,0 +1,253 @@
+.DRIVER30      23/6/82       ADDED BUFFER FOR READ SECTORS
+.DRIVER02      12/5/81       HIGH SPEED BYTE READ/WRITE LOOP
+.        EQUATES FOR DISK CONTROLLER TYPE 1771
+.
+SEEK     EQU   $18
+RESTORE  EQU   $08
+                            .(20 MSECS)      (6 MSECS)
+DRVREG   EQU   $E014
+COMREG   EQU   $E018
+TRKREG   EQU   $E019
+SECREG   EQU   $E01A
+DATAREG  EQU   $E01B
+BUFPTR   FCB   05,00,00,01,00   POINTER TO TRACK BUFFER
+         FMB   15,0
+BUFPTR1  FCB   05,00,00,$10,00
+         FMB   15,0
+BUFLAG   FCB   0             0 READ INTO FIRST TRCK BUFFER
+         ORG   $DE00
+DDREAD    JMP   DDRSEC
+.
+DDWRITE    JMP   DDWSEC
+.
+DDVERIFY    JMP   DVERFY
+.
+DDRESTOR    JMP   TRACK00
+.
+DDSELECT    JMP   DRSEL
+.
+DDCREADY    JMP   CDRRDY
+.
+DDQCREDY    JMP   QDRRDY
+.
+DDCOLD   JMP   DDCOLDST
+.
+DDWARM    JMP   DDWARMST
+.
+DDSEEK   JMP   TSSEEK
+.
+DDREAD1  JMP   RDSEC1        LOOK UP BUFFER BEFORE ACTUAL READ SECTOR
+
+DDWRITE1 JMP   WRSECT         "    "   "      "      "    WRITE SECTOR
+
+CHECKDC  JMP   CHECKDISK
+CURDRVNO FCB   0             CURRENT DRIVE NUMBER
+LSTTRKNO FMB   4,0           LIST OF TRACKS LAST ACCESSED ON DRIVES 0-3
+DISKCHG  FMB   4,0           DISK CHANGE STATUS ON DRIVES 0-3
+DDRSEC    BSR   TSSEEK       READ SECTOR
+         STA   TRKREG
+         LDA   #$88
+         STA   COMREG         ISSUE COMMAND
+         BSR   DDELAY1         DELAY
+         CLRB               .SET COUNT TO 256 BYTES/SECTOR  MAXIMUM
+         PSHS  DP,CC         SAVE DP REGISTER
+         SEI
+         LDA   #$E0           SET DIRECT PAGE TO $E000 TEMPORARILY
+         TFR   A,DP
+         BRA   DDRL2         GO AND CHECK TO SEE IF DATA AVAILABLE
+DDRL1    LDA   <DATAREG      READ BYTE
+         STA   $00,X+        STORE IN BUFFER
+DDRL2    LDB   <COMREG       READ STATUS REGISTER
+         BITB  #02           READY FOR NEXT BYTE?
+         BNE   DDRL1         YES BRANCH
+         BITB  #01           READ SECTOR COMPLETED
+         BNE   DDRL2         NOT COMPLETE LOOK FOR ANOTHER BYTE
+         PULS  DP,CC         RESTORE ORIGINAL DP REGISTER
+RDDONE   BITB  #$9C        NOT READY OR RECORD NOT FOUND OR CRC ERROR
+                            .OR LOST DATA
+         RTS
+.
+WTDONE   LDB   COMREG        READ DISK STATUS REGISTER
+         BITB  #$01        STILL BUSY
+         BNE   WTDONE         YES LOOP TILL NOT BUSY
+         RTS
+.
+TSSEEK    STB   SECREG       STORE SECTOR NUMBER INTO SECTOR REGISTER
+         CMPB  #SECTORS        SECTORS >=11 ARE ON SIDE 2 OF DISK
+         LDB   #$00        PREPARE FOR SIDE 1
+         BCS   SIDE1         IS SIDE 1
+         LDB   #$40        PREPARE FOR SIDE 2      BIT 6 IS SET
+SIDE1    ORB   CURDRVNO         OR SIDE WITH DRIVE NUMBER
+         STB   DRVREG        STORE AT DRIVE SELECT REGISTER
+         CMPA  TRKREG        ALREADY ON RIGHT TRACK?
+         BEQ   CHKRDY          YES CHECK READY AND RETURN
+         BLO   STEPOUT       STEP OUT TO TRK 0 DIRECTION
+         LDB   #$59          STEP IN WITH 6 MSEC STEEPING RATE
+         BRA   STEPCM
+STEPOUT  LDB   #$79          STEP OUT WITH 6 MSEC STEPPING RATE
+STEPCM   STB   COMREG
+         BSR   DDELAY1       DELAY
+         BSR   WTDONE        WAIT TILL DONE
+         STA   DATAREG       NO  -  SET TRACK SEEK REGISTER
+         BSR   CHKRDY        ENSURE UP TO SPEED
+         PSHS  A,B,X
+         LDA   #SEEK|RATE        SEEK HEAD LOADED AT START
+         STA   COMREG        TO COMMAND REGISTER
+         BSR   DDELAY1         DELAY
+         BSR   WTDONE         WAIT TILL DONE, AND RETURN
+         LDX   #380          16 mSec SETTLING TIME
+WAITB    BSR   DDELAY1     
+         LEAX  -1,X
+         BNE   WAITB
+         PULS  A,B,X,PC
+. IF NOT READY (TURNING) WAIT 0.5 SEC TO ENSURE UP TO SPEED
+.
+CHKRDY   PSHS  B
+         LDB   COMREG
+         BPL   RDY
+         BSR   WAITSP
+RDY      PULS  B,PC
+.
+WAITSP   PSHS  X
+         LDX   #15000
+W1LOOP   BSR   DDELAY1
+         LEAX  -1,X
+         BNE   W1LOOP
+         PULS  X,PC
+.
+DDELAY1  BSR   DDELAY2
+DDELAY2  BSR   DDELAY3
+DDELAY3  RTS
+.
+DDWSEC   BSR   TSSEEK       SEEK TRACK
+         STA   TRKREG
+         LDA   #$A8          WRITE SECTOR
+         STA   COMREG        TO COMMAND REGISTER
+         BSR   DDELAY1         DELAY
+         PSHS  DP,CC         SAVE DP REGISTER
+         SEI
+         LDA   #$E0          SET DIRECT PAGE TO $E000 TEMPORARILY
+         TFR   A,DP
+         BRA   DDWL2         GO AND PRELOAD A WITH FIRST BYTE OF
+                            .BUFFER
+DDWL1    STA   <DATAREG      STORE TO DISK
+DDWL2    LDA   $00,X+        GET BYTE FROM BUFFER
+DDWL3    LDB   <COMREG       READ STATUS REGISTER
+         BITB  #02           READY FOR NEXT BYTE?
+         BNE   DDWL1         YES BRANCH
+         BITB  #01           WRITE SECTOR COMPLETED?
+         BNE   DDWL3         NOT COMPLETED LOOP
+         PULS  DP,CC         RESTORE ORIGINAL DP REGISTER
+DDWDONE  BITB  #$DC          NOT READY OR WRITE PROTECT OR RECORD NOT
+                            .FOUND OR CRC ERROR OR LOST DATA
+         RTS
+.
+DVERFY    LDA   #$88         READ TRACK COMMAND
+         STA   COMREG
+         BSR   DDELAY1        DELAY
+        LBSR   WTDONE         WAIT TILL READ FINISHED & CHECK STATUS REG
+         BITB  #$98          DRIVE NOT READY OR RECORD NOT FOUND OR
+                            .CRC ERROR
+         RTS
+.
+TRACK00
+         BSR   DRSEL         SELECT DRIVE
+         BCS   ERRETN
+         LDA   #RESTORE|RATE          RESTORE
+         STA   COMREG        ISSUE COMMAND
+         BSR   DDELAY1         DELAY
+        LBSR   WTDONE         WAIT TILL READY AND RETURN STATUS REG IN B
+         BITB  #$40          WRITE PROTECT DISK?
+         BNE   WRPROT         YES
+         CLC                 NO    -   NO ERROR
+         RTS
+WRPROT   LDB   #$16          "DISK WRITE PROTECTED"  -  ERROR 10
+         ASRB                CLEAR CARRY
+ERRETN   RTS
+.
+.   INPUT  X--> FCB
+.   OUTPUT B--> NON ZERO IF DISK CHANGED
+CHECKDISK
+         PSHS  X
+         LDA   DRIVENO,X
+         ANDA  #3
+         LDX   #DISKCHG
+         STA   DRVREG
+         TST   A,X
+         BNE   CHKDK2        ALREADY KNOWN TO HAVE CHANGED
+         LDB   DRVREG
+         ANDB  #$02
+         BEQ   CHKDK1        NOT CHANGED
+         TFR   A,B           HAS CHANGED.DESELECT DRIVE BY SELECTING NEXT
+         INCB
+         ANDB  #3
+         PSHS  B
+         STB   DRVREG
+         LDB   DRVREG
+         ANDB  #$02
+         STA   DRVREG        RESELECT ORIGINAL DRIVE
+         PULS  A
+         STB   A,X
+CHKDK3   LDB   #$FF          SET NON EQUAL CONDITION
+CHKDK1   PULS  X,PC
+
+CHKDK2   CLR   A,X           RESET THE DRIVE DOOR FLAG
+         BRA   CHKDK3
+.
+DRSEL    LDA   $03,X       GET DRIVE NUMBER
+         CMPA  #$04          MUST BE < 4
+         BLO   DRVOK
+CHKERR1  LDB   #$1F          "ILLEGAL DRIVE NUMBER"   -    ERROR 31
+         ASRB
+         RTS
+.
+DRVOK    PSHS  X
+         BSR   LSTTRK         POINT X TO LAST TRACK NO. ACCESSED OF
+                            .CURRENT DRIVE
+         LDB   TRKREG        READ CURRENT TRACK NUMBER
+         STB   ,X            STORE AS LAST ACCESSED TRACK ON DRIVE "N"
+         STA   DRVREG        STORE DRIVE NO. IN DRIVE SELECT REGISTER
+         CMPA  CURDRVNO         SAME AS LAST DRIVE ACCESSED?
+         BEQ   SAMDRV       YES- NO NEED TO WAIT WHILE DRIVE SELECTED
+        LBSR   DDELAY1         DELAY WHILE DRIVES ARE RE-SELECTED
+SAMDRV   STA   CURDRVNO         STORE THIS A "LAST" DRIVE ACCESSED
+         BSR   LSTTRK         POINT X TO LAST TRACK NUMBER ACCESSED
+                            .OF CURRENT DRIVE
+         LDA   ,X            GET LAST TRACK ACCESSED
+         STA   TRKREG        PUT INTO TRACK REGISTER
+         PULS  X
+         BRA   CRDY2         CHECK DRIVE READY
+.
+LSTTRK   LDX   #LSTTRKNO
+         LDB   CURDRVNO         POINT X TO NO. OF TRACK LAST ACCESSED ON
+                            .DRIVE
+         ABX
+         RTS
+.
+CDRRDY    LDA   $03,X        SELECT DRIVE AS REQUIRED
+         STA   DRVREG
+CRDY2    BSR   CRDY3         CHECK IF READY
+         BCC   RDYEND
+        LBSR   WAITSP
+         BRA   CRDY3         THEN TEST AGAIN
+.
+QDRRDY    LDA   $03,X        GET DRIVE NO.AND
+         STA   DRVREG        SELECT AS REQUIRED
+CRDY3    LBSR  DDELAY1       DELAY IN CASE NEW DRIVE
+         CLC                 CLEAR ERROR BIT
+QDRLP    LDB   COMREG        READY?
+         BPL   RDYEND             READY RETURN?
+         SEC                 NOT READY,RETURN
+RDYEND   RTS
+.
+DDCOLDST    LDX   #CURDRVNO
+         LDB   #$06          CLEAR SIX BYTES
+DDCLP    CLR   ,X+           INCLUDING LAST TRACKS ACCESSED ON
+         DECB                DRIVES 0-4
+         BNE   DDCLP         LOOP TILL DONE
+DDWARMST LDA   #5
+         STA   BUFPTR
+         STA   BUFPTR1
+         RTS
+.
+.                            1 READ INTO SECOND TRACK BUFFER

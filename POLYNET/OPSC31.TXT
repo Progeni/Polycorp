@@ -1,0 +1,1055 @@
+.OPSC02        12/5/81       HIGH SPEED BYTE READ/WRITE LOOP
+.                            DISABLE INTERRUPTS DURING FMS CALL
+.        ERRIF *>$D400
+         ORG   $D400         FILE MANAGEMENT SYSTEM
+   
+.----------------------------------------------------------------
+.--------    FCB DESCRIPTION EQUATES   --------------------------
+.----------------------------------------------------------------
+         
+FNCODE   EQU   0             FUNCTION CODE
+ERORSTAT EQU   1             ERROR STATUS BYTE
+ACTSTAT  EQU   2             ACTIVITY STATUS
+DRIVENO  EQU   3             DRIVE NUMBER
+FILENAME EQU   4             FILE NAME
+FILEEXT  EQU   12            EXTENSION
+ATTRIB   EQU   15            FILE ATTRIBUTES
+FLSTRT   EQU   17            STARTING DISK ADDRESS OF THE FILE
+FILEND   EQU   19            ENDING DISK ADDRESS OF THE FILE
+FLSIZE   EQU   21            FILE SIZE
+FLSMAP   EQU   23            FILE SECTOR MAP INDICATOR
+FILEDATE EQU   25            FILE CREATION DATE
+FCBPTR   EQU   28            FCB LIST POINTER
+CURPOS   EQU   30            CURRENT POSITION
+CURRNO   EQU   32            CURRENT RECORD NUMBER
+DATINX   EQU   34            DATA INDEX
+RNDINX   EQU   35            RANDOM INDEX
+NAMWKBUF EQU   36            NAME WORK BUFFER
+CDIRAD   EQU   47            CURRENT DIRECTORY ADDRESS
+FSTDIR   EQU   50            FIRST DELETED DIRECTORY POINTER
+SCRBYTES EQU   53            SCRATCH BYTES
+SPCOMFLG EQU   59            SPACE COMPRESSION FLAG
+SPCKNT   EQU   SPCOMFLG      SPACE COUNT FLAG IN SINGLE BYTE READ
+SECBUF   EQU   64            SECTOR BUFFER
+
+.------------------------------------------------------------------
+.----------------   END EQUATES FOR FCB   -------------------------
+.------------------------------------------------------------------
+    
+ATTR     EQU    0
+ADR      EQU    18
+CPTR     EQU    1
+CHANO    EQU   15             CHANNEL NUMBER
+PTR      EQU   16
+TIMPTR   EQU   20
+    
+.------------------------------------------------------------------
+.-------------    STANDARD ENTRY POINTS    ------------------------
+.------------------------------------------------------------------
+ 
+ 
+FMSINIT  JMP   COLDST        FMS INITIALIZATION ENTRY POINT
+
+FMSCLS   JMP   CLOSE      FMS CLOSE ENTRY POINT
+
+FMSCALL  JMP   FMSENTRY      FMS CALL ENTRY POINT
+
+ 
+.------------------------------------------------------------------
+.------------------------     END     -----------------------------
+.------------------------------------------------------------------
+ 
+ 
+ 
+.-------------------------------------------------------------------
+.----------------   VARIABLE STORAGE AREA   ------------------------
+.-------------------------------------------------------------------
+ 
+ 
+FCBBP    FDB   0             FCB BASE POINTER
+FCBCADR  FDB   0             CURRENT FCB ADDRESS
+LD40D    FDB   0
+LD40F    FDB   0
+RETRYC   FCB   0       RETRY COUNT PER RESTORE
+RSTOC    FCB   0      RETRY COUNT OF RESTORE
+LD413    FCB   0
+LD414    FCB   5
+LD415    FDB   5
+LD417    FCB   0
+LD41A    FCB   0
+.FREE CHAIN POINTER TABLE
+LD41D    RMB   28
+VFLAG    FCB   $FF           VERIFY FLAG
+ADDR     FDB   0             POLY ADDR REG
+LD41B    FDB   0
+STRFREE  FDB   00            START OF FREE CHAIN POINTER
+ENDPTR   FDB   FILNMP        END OF FILE OPENED CHAIN
+PREVPTR  FDB   00            TEMP REG FOR PREVIOUS LINKED FCB
+FILNMP   FCB   0
+         FDB   FILNMP
+         FMB   12,$FF
+         FCB   0             CHANNEL NO
+         FDB   00            FORWARD LINK
+         FDB   00            ADR
+         FMB   3,0           TIMPTR----TIME IN msec
+LSIZE    EQU   *-FILNMP      FCB SIZE IN MINIMASTER
+CHANNEL  FCB   1
+SPASS:   FDB   0          SUPER PASSWORD
+SPUFG:   FCB   0
+USERPSWD: FDB  0          USER PASSWORD
+
+ 
+.------------------------------------------------------------------
+.----------------------     END     -------------------------------
+.------------------------------------------------------------------
+ 
+ 
+ 
+COLDST   JSR   DDCOLD
+         LDX   #LD41D
+         LDD   #$104        LOAD A WITH 1 B WITH 4
+COLST1   STA   6,X
+         LEAX  7,X
+         DECB
+         BNE   COLST1
+         RTS
+
+CLOSE    LDX   #FILNMP       LOAD X WITH FCB BASE POINTER
+         STX   PREVPTR
+         LDX   PTR,X
+CLOS2    BEQ   CLOEND
+         LDD   PTR,X         GET NEXT POINTER
+         PSHS  D,CC
+         LDD   ADR,X         CHECK USER ADDR
+CLOS4    CMPD  ADDR          COMPARE WITH CURRENT POLY ADDRESS
+         BNE   CLOS1
+         JSR   DELEPTR       DELETE FROM CHAIN POINTER
+         BRA   CLOS3         SKIP OVER REASSIGN PREVPTR
+CLOS1    STX   PREVPTR
+CLOS3    PULS  X,CC
+         BRA   CLOS2
+CLOEND   RTS                 .EXIT CLOSE ACTION
+
+FMSENTRY PSHS  Y,B           SAVE REGISTERS
+         STX   FCBCADR         STORE ADDRESS OF FCB
+         CLR   ERORSTAT,X    CLEAR ERROR STATUS BYTE
+         LDB   FNCODE,X      LOAD FUNCTION CODE INTO B
+         BNE   IDOPTION      NOT READ/WRITE NEXT BYTE/CHARACTER
+         LDB   $02,X         LOAD ACTIVITY STATUS
+         BEQ   ER018         BRANCH IF NOT READ/WRITE NEXT BYTE
+         CMPB  #$02          SEE IF FILE OPEN FOR WRITE
+         BEQ   FMSWRITE      BRANCH IF WRITE NEXT BYTE/CHARACTER
+         JSR   REABYT        READ A BYTE
+FINISH   LDX   FCBCADR         PREPARE TO EXIT
+         BCS   ERSET         CHECK FOR SOFTWARE ERROR
+         TST   PR1           WAS THERE A SYSTEM ERROR
+         BNE   FAILURE       BRANCH ON FAILURE
+         CLRB                .DUMMY INSTRUCTION???????????????????????
+         PULS  Y,B           RE-INSTATE REGISTERS
+         RTS                 .EXIT FMS CALL ACTION
+
+FMSWRITE JSR   WRBYTE        WRITE NEXT BYTE/CHARACTER
+         BRA   FINISH        EXIT WRITE NEXT BYTE/CHARACTER
+
+ER018    LDB   #$12          SYSTEM FILE STATUS ERROR
+         BRA   ERSET
+
+IDOPTION CMPB  #(OPTIONEND-OPTION)+>1 TEST IF OPTION VALID
+         BLS   VALFCODE      BRANCH IF FUNCTION CODE VALID
+         LDB   #$01          ILLEGAL FMS FUNCTION CODE ENCOUNTERED
+         BRA   ERSET
+
+VALFCODE DECB                .RESET B TO RANGE 0 THRU 21
+         ASLB                .CHANGE B TO 2 BYTE MULTIPLES
+         LDX   #OPTION       LOAD X WITH THE ADDRESS OF THE JUMP LIST
+         JSR   [B,X]         JUMP USING JUMP LIST "OPTION"
+         LDX   FCBCADR         RESET X TO POINT TO CURRENT FCB ADDRESS
+         BCC   FAILURE       IF NO ERROR DON'T RESET ERROR STATUS
+ERSET    STB   ERORSTAT,X    STORE ERROR STATUS BYTE
+FAILURE  TST   ERORSTAT,X    TEST ERROR STATUS BYTE
+         PULS  Y,B           RE-INSTATE STACK
+         RTS                 .EXIT LEAVING Z FLAGGING ERROR
+
+ 
+.----------------------------------------------------------------
+.-----------   OPTION JUMP LIST TABLE   -------------------------
+.----------------------------------------------------------------
+ 
+ 
+OPTION   FDB   ROPEN         OPEN FOR READ
+         FDB   WOPEN         OPEN FOR WRITE
+         FDB   UOPEN         OPEN FOR UPDATE
+         FDB   CLFILE        CLOSE FILE
+         FDB   RWFILE        REWIND FILE
+         FDB   DOPEN         OPEN DIRECTORY
+         FDB   GETIR         GET INFORMATION RECORD
+         FDB   PUTIR         PUT INFORMATION RECORD
+         FDB   RSSECT        READ SINGLE SECTOR
+         FDB   WSSECT        WRITE SINGLE SECTOR
+         FDB   ZZZZC         RESERVED FOR FUTURE SYSTEM USE
+         FDB   DLFILE        DELETE FILE
+         FDB   RNFILE        RENAME FILE
+         FDB   ZZZZA         RESERVED FOR FUTURE SYSTEM USE
+         FDB   NSSECT        NEXT SEQUEN TIAL SECTOR
+         FDB   OSIREC        OPEN SYSTEM INFORMATION RECORD
+         FDB   GRSECT        GET RANDOM BYTE FROM SECTOR
+         FDB   PRSECT        PUT RANDOM BYTE INTO SECTOR
+         FDB   ZZZZB         RESERVED FOR FUTURE SYSTEM USE
+         FDB   FNDRIVE       FIND NEXT DRIVE
+         FDB   POSNRN        POSITION TO RECORD N
+         FDB   BUREC         BACKUP ONE RECORD
+         FDB   FILE_START_SECTOR
+         FDB   READ_NEXT_SECTOR
+         FDB   FILE_LOCK
+         FDB   FILE_UNLOCK
+         FDB   PUTRND        PUT RECORD OF RANDOM FILE
+         FDB   NEWRND        OPEN NEW RANDOM FILE
+         FDB   CHKBNLOCK     CHECK FILE LOCK
+OPTIONEND
+  
+ 
+.---------------------------------------------------------------
+.--------------------     END     ------------------------------
+.---------------------------------------------------------------
+ 
+ 
+ 
+FSTAT    BSR   FINDP12       FIND NEXT POINTER
+         PSHS  X,CC          SAVE THE CONDITION,POINTERS
+         BSR   ADD_LINK      TO CHAIN
+         PULS  X,CC          RESTORE THE POINTERS AND CC
+         BNE   ADD1          BRANCH IF FILE NOT IN USE
+         LDD   CPTR,X
+         STY   CPTR,X        SET UP CIRCULAR LINK LIST
+         STD   CPTR,Y
+         CLC
+         RTS
+ADD1     STY   CPTR,Y        CIRCULAR LINK TO ITSELF
+         CLC
+         RTS
+
+.  FIND NEXT POINTER
+FINDP12  LDY   FCBCADR       LOAD CURRENT FCB ADDRESS
+         LDX   #FILNMP       FILE NAME POINTER
+FINDP1   BEQ   NFINDP        BRANCH IF NO FILE ON THE CHAIN
+         BSR   COMP_NAM      COMPARE THE NAME
+         BEQ   NAM_FOUND     BRANCH IF NAME FOUND
+         STX   PREVPTR       SAVE X AS PREVIOUS FCB POINTER
+         LDX   PTR,X         OTHERWISE POINTS TO NEXT FILE ON THE CHAIN
+         BRA   FINDP1        TRY AGAIN
+NFINDP   ANDCC #$FB          SET NOT EQUAL CONDITION(CLEAR Z)
+NAM_FOUND
+         RTS
+
+COMP_NAM PSHS  X,Y           SAVE X,Y POINTERS
+         LEAX  3,X           POINTS TO FILE NAME
+         LEAY  3,Y           POINTS TO FILE NAME
+         LDB   #12           12 BYTES TO COMPARE
+COMP1    LDA   0,Y+
+         CMPA  0,X+    
+         BNE   COMPEXIT      BRANCH TO EXIT
+         DECB
+         BNE   COMP1
+COMPEXIT PULS  X,Y,PC
+
+INITFCB  PSHS  X
+         LDA   DRIVENO,X
+         LDX   #FILNMP
+INITF1   LDX   PTR,X
+         BEQ   INITFEX
+         CMPA  DRIVENO,X
+         BNE   INITF1
+         LDA   ATTR,X
+         ORA   #$80
+         STA   ATTR,X
+         BRA   INITF1
+INITFEX  JSR   FRESEC     POINT X TO FREE SECTOR TABLE
+         INC   6,X           SET DISK CHANGE FLAG
+         JSR   DDWARM
+         PULS  X,PC
+
+. PUT FILE NAME OF CURRENT FCB INTO OPEN CHAIN
+. IF THERE IS NO MORE ROOM IN FREE CHAIN THEN EXTEND CURRENT BUFFER
+
+ADD_LINK LDX   STRFREE       LOAD FREE CHAIN POINTER
+         BNE   ADDLK1        BRANCH IF NOT END
+         BSR   ADD_BUFFER    OTHERWISE ADD BUFFER
+ADDLK1   LDY   ENDPTR        END OF FILE CHAIN POINTER
+         STX   PTR,Y         LAST FILE POINTS TO THIS NEW FILE
+         LDD   PTR,X         UPDATE FREE CHAIN POINTER
+         STD   STRFREE
+         CLR   PTR,X         MAKE IT THE LAST ON THE CHAIN
+         CLR   PTR+1,X
+         STX   ENDPTR        UPDATE END POINTER
+         LDY   FCBCADR       LOAD CURRENT FCB
+         LDA   CHANNEL
+         INC   CHANNEL
+         STA   61,Y          SCRATCH AREA
+         STA   CHANO,X
+         LDD   ADDR
+         STD   ADR,X
+         CLRA
+         TST   FLSMAP,Y      RANDOM INDEX BYTE
+         BEQ   ADDLK2
+         ORA   #$02          SET RANDOM FLAG IN ATTRIBUTE
+ADDLK2   STA   ATTR,X
+         LDB   #$0C          MOVE 12 BYTES OF FILE NAME
+         LEAX  3,X           POINTS X TO START OF FILE NAME AREA
+         LEAY  3,Y           POINTS Y TO START OF FILE NAME IN FCB
+MOVEYX   LDA   0,Y+          MOVE FROM Y TO X B NUMBER OF TIMES
+         STA   0,X+      
+         DECB
+         BNE   MOVEYX
+         LDY   ENDPTR
+         RTS
+
+ADD_BUFFER
+         LDX   MEMEND        MEMORY END
+         PSHS  X
+         LEAX  -LSIZE*16,X      ADD 16 FILE AREA
+         STX   MEMEND        UPDATE MEMORY END
+         LEAX  1,X
+         STX   STRFREE
+ADDBF    LEAY  LSIZE,X          Y POINTS TO NEXT FILE NAME AREA
+         CMPY  0,S           CHECK WITH OLD VALUE OF MEMEND
+         BHS   ADDBEND       BRANCH IF REACH THE LIMIT
+         STY   PTR,X
+         LEAX  LSIZE,X
+         BRA   ADDBF
+ADDBEND  CLR   PTR,X         CLEAR LAST FILE POINTER
+         CLR   PTR+1,X
+         LEAS  2,S           RESTORE STACK
+         LDX   STRFREE
+         LDD   ENDPTR
+         BNE   ADD2
+         STX   ENDPTR
+ADD2     RTS
+
+FINDP13  LDY   FCBCADR
+         LDX   #FILNMP
+FINDP15  BEQ   NFINDP3       BRANCH IF NO FILE ON CHAIN
+         LDA   61,Y
+         CMPA  CHANO,X       COMPARE WITH CHANNEL NO
+         BNE   NFINDP4       BRANCH IF DIFFERENT CHANNEL NO
+         JSR   COMP_NAM      COMPARE THE NAME
+         BEQ   NAM_FOU13
+NFINDP4  STX   PREVPTR       SAVE X AS PREVIOUS POINTER
+         LDX   PTR,X
+         BRA   FINDP15
+NFINDP3  ANDCC #$FB
+NAM_FOU13
+         RTS
+
+RSTAT                        .DELETE POINTER
+         BSR   FINDP13       FIND IT IN THE LINK LIST
+         BNE   RSTERR        ERROR IF NOT FOUND
+DELEPTR  PSHS  X
+         LDD   PTR,X         LOAD FORWARD CHAIN POINTER
+         LDX   PREVPTR       STORE IN PREVIOUS FCB
+         STD   PTR,X         THUS DELETE CURRENT FCB FROM CHAIN
+         LDD    ENDPTR
+         CMPD   0,S
+         BNE    DELET2
+         STX    ENDPTR
+DELET2   LDX   0,S           FORWARD POINTER
+         LDY    CPTR,X
+DELET1   LDD   CPTR,X        CHECK CIRCULAR LINKED LIST
+         CMPD  0,S           POINTS BACK TO ITSELF?
+         BEQ   CIRFOUND      FOUND THE END OF CHAIN
+         TFR   D,X
+         BRA   DELET1        TRY AGAIN
+CIRFOUND STY   CPTR,X        STORE CURRENT FCB FORWARD CIRCULAR LINK
+.                            AND DELETE IT FROM CIRCULAR LINKED LIST
+         PULS   X
+         LDD    STRFREE       PUT IT BACK TO FREE CHAIN
+         STD    PTR,X
+         STX    STRFREE
+         CLC  
+         RTS
+
+RSTERR   LDB   #$0D          ERROR 13 ILLEGAL FCB USED
+         SEC
+         RTS
+
+
+.FSTAT    BSR   FINDP         FIND NEXT POINTER
+.         BNE   FFREE         BRANCH IF FILE NOT IN USE
+.         LDB   #$02          THE REQUESTED FILE IS IN USE
+.         ORCC  #$01          SET C
+.         RTS                  .EXIT
+.
+.FFREE    STD   $00,X         UPDATE POINTERS
+.         LDX   $00,X
+.         CLR   $00,X
+.         CLR   ERORSTAT,X    CLEAR ERROR STATUS BIT
+          RTS                 .EXIT FSTAT
+.
+.RSTAT    BSR   FINDP         FIND NEXT POINTER
+.         BEQ   FUSE          BRANCH IF FILE IN USE
+.         LDB   #$0D          ILLEGAL DISK ADDRESS ENCOUNTERED
+.         ORCC  #$01          SET C
+.         RTS                 .EXIT RSTAT
+.
+.FUSE     LDD   [$00,X]
+.         STD   $00,X
+.         ANDCC #$FE          CLEAR C
+.         RTS                 .EXIT RSTAT
+.
+.FINDP    LDD   FCBCADR         LOAD CURRENT FCB ADDRESS
+.         ADDD  #$1C          INCREMENT ADDRESS TO POINT TO FCB LIST POINTER
+.         LDX   #FCBBP        LOAD X WITH ADDRESS OF "FCBBP"
+.CHECKXY  LDY   $00,X         LOAD Y WITH ADDRESS POINTED TO BY X
+.         BNE   CHECKP        TERMINATE ON A NULL POINTER
+.         ANDCC #$FB          CLEAR C AND SET Z
+.         RTS                  .EXIT
+.
+.CHECKP   CMPD  $00,X         SEE IF X POINTS TO FCB LIST POINTER
+.         BNE   NEXTP         BRANCH IF IT DOESN'T
+.         RTS                 .EXIT IF IT DOES
+.
+.NEXTP    LDX   $00,X         GET NEXT POINTER
+.         BRA   CHECKXY
+
+CLRFCB   LDX   FCBCADR       THIS ROUTINE CLEAR FCB BLOCK
+         CLRA
+         CLRB
+         BSR   NCLR          CLEAR 256 BYTES
+         LDB   #$2F          LOAD B WITH COUNT OF 47
+NCLR     STA   $11,X
+         LEAX  1,X           INCREMENT X BY ONE
+         DECB                .DECREMENT B BY 1
+         BNE   NCLR
+         RTS                  .EXIT
+
+. MOVE FILENAME TO WORK BUFFER AREA
+MOVNAM   LDX   FCBCADR
+         LDB   #$0B          LOAD B WITH COUNT OF 11
+LD54E    LDA   FILENAME,X
+         STA   $24,X
+         LEAX  $01,X         INCREMENT X BY ONE
+         DECB                .DECREMENT B BY 1
+         BNE   LD54E
+         RTS                  .EXIT
+
+. COMPARE FILENAME WITH FILENAME IN WORK BUFFER AREA
+CMPNAM   LDX   FCBCADR
+         LDB   #$0B          LOAD B WITH COUNT OF 11
+CMPNA1   LDA   FILENAME,X
+         PSHS  A
+         LDA   $24,X
+         CMPA  ,S+
+         BNE   CMPEND        BRANCH IF FINISHED
+         LEAX  $01,X         INCREMENT X BY ONE
+         DECB                .DECREMENT B BY 1
+         BNE   CMPNA1
+CMPEND   RTS                  .EXIT
+
+
+. FN 17 GET RANDOM BYTE
+. POINTER FOUND IN RANDOM INDEX BYTE ($23) OF FCB
+
+GRSECT   LDX   FCBCADR
+         LDB   ACTSTAT,X
+         LSRB                 B=1 OR B=3 IS OK
+         BCC   ERR18          ILLEGAL FILE STATUS
+         LDB   RNDINX,X      RANDOM INDEX BYTE
+         JMP   LOCBYT         READ THE BYTE
+
+. WRITE BYTE TO CURRENT FCB,ON RETURN IF FCB IS FULL
+. THEN CARRY IS SET OTHERWISE CLEAR
+.
+W1BYTE   LDX   FCBCADR
+         LDB   DATINX,X
+         INC   DATINX,X        DATA INDEX BYTE
+         ABX
+         STA   $40,X
+         INCB
+         BNE   NFULL
+         SEC                  BUFFER IS FULL
+         RTS                  .EXIT
+
+.
+. FN 18 PUT RANDOM BYTE
+.
+PRSECT   LDX   FCBCADR
+         LDB   ACTSTAT,X
+         ANDB  #$03
+         CMPB  #$03
+         BNE   ERR18          IF NOT 3 THEN IT IS ERROR
+         ORB   #$80          SET FLAG TO SHOW SECTOR HAS BEEN UPDATED
+.                            ,BUT NOT WRITE TO DISK YET
+         STB   ACTSTAT,X
+         LDB   ATTRIB,X     CHECK FILE ATTRIBUTE
+         BITB  #$80         WRITE PROTECT ON ?
+         BNE   ERR11
+         LDB   RNDINX,X      RANDOM INDEX BYTE
+         ABX
+         STA   $40,X
+NFULL    CLC
+         RTS                  .EXIT
+
+ERR11    LDB   #$0B          THE FILE OR DISK IS WRITE PROTECTED
+         SEC                 SET C
+         RTS                  .EXIT
+
+.
+. FN 0   READ BYTE FROM CURRENT FCB
+.
+REABYT   LDA   SPCKNT,X      CHECK SPACE COUNT
+         BMI   REBYT1
+         BEQ   REAB10
+         DEC   SPCKNT,X     DECREMENT SPACE COUNT
+         LDA   #" "
+         BRA   REACLR       GO TO EXIT
+
+REAB10   BSR   REBYT1       READ A BYTE
+         BCS   REEXT        BRANCH IF ERROR
+         CMPA  #$18
+         BHI   REACLR
+         BEQ   REAB10       RE READ NEXT BYTE
+         CMPA  #$09
+         BNE   NOTSPC
+         BSR   REBYT1       YES SPACE COMPRESSSED
+         BCS   REEXT        BRANCH IF ERROR
+         LDX   FCBCADR
+         STA   SPCKNT,X
+         BRA   REABYT       START AGAIN
+
+NOTSPC   TSTA
+         BEQ   REAB10       ZERO,TRY NEXT BYTE
+REACLR   CLC                CLEAR CARRY NO ERROR
+REEXT    RTS                  .EXIT
+
+.
+. FN 5   REWIND A READ FILE
+.
+RWFILE   JSR   LDAB1         UPDATE ANY SECTOR THAT IS NOT WRITTEN
+         BCS   ERR18
+         BITA  #$01
+         BEQ   ERR18
+         STA   $00,X
+         JMP   LD9A0         CHECK PROTECTION AND RETURN
+
+ERR18    LDB   #$12          SYSTEM FILE STATUS ERROR
+         SEC                 SET C
+         RTS                  .EXIT
+
+REBYT1   LDX   FCBCADR
+         LDB   DATINX,X      CHECK DATA INDEX
+         BEQ   REANXT        READ NEXT SECTOR
+         INC   DATINX,X
+LOCBYT   ABX
+         LDA   SECBUF,X       PICK UP THE CORRECT BYTE
+         CLC                  NO ERROR
+         RTS                  .EXIT
+
+REANXT   BSR   NXTSEC         READ NEXT LOGICAL SECTOR
+         BCC   REBYT1         TRY AGAIN FOR READ A BYTE
+         RTS                  .EXIT
+
+READ_NEXT_SECTOR              .USE BY POPSCXX  FOR READ A BYTE
+         LDX   FCBCADR
+         CLR   FNCODE,X
+
+NXTSEC   LDX   FCBCADR
+         LDD   SECBUF,X       GET NEXT TRACK/SECTOR
+         INC   CURRNO+1,X     INCREMENT CURRENT RECORD NUMBER
+         BNE   NXTSE1
+         INC   CURRNO,X      INCR MS BYTE OF CURRENT REC
+NXTSE1   CMPD  #$00
+         BEQ   ERR08         BRANCH IF END OF FILE
+RDSECT   STD   CURPOS,X      CURRENT TRACK SECTOR POSITION
+         PSHS  A
+         LDA   #$04          SET DATA INDEX TO 4
+         STA   DATINX,X
+         PULS  A
+         BSR   RSSECT        CALL ROUTINE TO READ A SECTOR
+         BCC   RESCLR        BRANCH TO EXIT IF NO ERROR
+         BITB  #$80
+         BEQ   ERR09
+         LDB   #$10          DRIVES NOT READY
+         BRA   ERRNN
+
+ERR09    LDB   #$09          DISK FILE READ ERROR
+         BRA   ERRNN
+
+ERR08    LDB   #$08          READ PAST END OF FILE
+ERRNN    SEC                 SET C
+RESCLR   RTS                  .EXIT
+
+.
+. FN 9   READ A SECTOR FROM CURRENT TRACK/SECTOR OF FCB
+.
+RSSECT   BSR   CLRTRY        CLEAR RETRY COUNT
+         LDX   FCBCADR
+         TST   CMFLG         IS IT RUNNING A UTILITY IN MINIMASTER?
+         BNE   RSECT1        BRANCH IF TRUE
+         JSR   DDREAD1       LOOK UP BUFFER FIRST
+         BCS   RSEXIT        EXIT IF ERROR
+         BRA   RSECT2
+RSECT1   JSR   DDSELECT      DRIVE SELECT
+         BCS   RSEXIT        EXIT IF ERROR
+RETRY1   BSR   GETTKBF       GET TRACK AND SECTOR
+         JSR   DDREAD
+RSECT2   BNE   CHKTRY        ERROR IN READ CHECK RETRY
+         CLC
+         RTS                  .EXIT
+
+CHKTRY   PSHS  B             SAVE ERROR CONDITION
+         BSR   CHKTY1
+         PULS  B
+         BCC   RETRY1        BRANCH TO RETRY
+RSEXIT   RTS                  .EXIT
+
+GETTKBF  LDX   FCBCADR       POINT TO CURRENT FCB
+         LDD   $1E,X         PICK UP TRACK AND SECTOR
+         LEAX  $40,X         POINT X TO BUFFER
+         RTS                  .EXIT
+
+CLRTRY   CLRA
+         STA   RETRYC
+         STA   RSTOC
+         RTS                  .EXIT
+
+CHKTY1   BITB  #$10
+         BNE   TRYUP      DRIVE NOT READY,DONOT TRY ANYMORE
+         BITB  #$80
+         BNE   GIVEUP    DRIVE NOT READY
+         LDB   RETRYC   LOAD RETRY COUNT
+         INCB
+         CMPB  #$05
+         BEQ   TRYUP      5 TIMES IS UP
+         STB   RETRYC
+         BRA   ZZZZA
+
+TRYUP    CLR   RETRYC     CLEAR RETRY COUNT
+         LDB   RSTOC      LOAD RESTORE COUNT
+         INCB
+         CMPB  #$07       7 TIMES YET?
+         BEQ   GIVEUP      TRIES EXHAUSTED!
+         STB   RSTOC
+         LDX   FCBCADR
+         JSR   DDRESTOR    DRIVE RESTORE
+ZZZZA    CLC
+         RTS                  .EXIT
+
+GIVEUP   SEC
+         RTS                  .EXIT
+
+.
+. FN 10  WRITE A SECTOR 
+.
+WSSECT   BSR   CLRTRY      CLEAR THE NUMBER OF RETRY
+         LDX   FCBCADR
+         JSR   DDSELECT    SELECT THE DRIVE
+         BCS   NTRDY1      BRANCH IF DRIVE NO READY
+WRETRY   LDX   FCBCADR
+         JSR   DDWRITE1    WRITE THE SECTOR
+         BNE   WSERR       BRANCH IF ERROR
+         LDA   VFLAG       VERIFY FLAG
+         BEQ   NOVRY       NO VERIFYING
+         JSR   DDVERIFY
+         BEQ   NOVRY
+WSERR    BITB  #$40
+         BNE   WRERR1
+         PSHS  B
+         BSR   CHKTY1      CHECK RETRY COUNT
+         PULS  B
+         BCC   WRETRY      TRY AGAIN
+NTRDY1   RTS                  .EXIT
+
+WRERR1   SEC                 SET C
+         RTS                  .EXIT
+
+.
+. FN 0   WRITE A BYTE TO CURRENT FCB
+.
+WRBYTE   LDX   FCBCADR
+         LDB   SPCOMFLG,X     CHECK SPACE COMPRESSION FLAG
+         BMI   WRBYT
+         CMPA  #" "
+         BNE   WNTSPC      NOT SPACE,WRITE IT OUT
+         INCB
+         STB   $3B,X
+         CMPB  #$7F
+         BNE   NOVRY       CLEAR CARRY AND RETURN
+         BRA   WRSPAC     WRITE OUT 09,$7E(MULTIPLE SPACES)
+
+NONZER   BSR   WRSPAC       WRITE OUT SPACES
+         BCC   WRBYTE       TRY AGAIN IF NO ERROR
+         RTS                .EXIT
+
+. REG B CONTAIN THE NUMBER OF SPACES NOT WRITTEN
+WNTSPC   TSTB
+         BEQ   WRBYT       BRANCH IF NO " " TO WRITE
+         BRA   NONZER
+
+NOVRY    CLC
+         RTS                  .EXIT
+
+. WRITE SPACES
+WRSPAC   PSHS  A
+         CMPB  #$01        IS IT JUST ONE SPACE
+         BNE   MULSPC      NO BRANCH TO MULTIPLE SPACES
+         LDA   #" "
+         BRA   MULSEX
+
+MULSPC   LDA   #$09
+         BSR   WRBYT
+         PULS  A
+         BCS   MULEXT
+         PSHS  A
+         LDX   FCBCADR
+         LDA   $3B,X
+MULSEX   CLR   $3B,X          CLEAR SPACE COUNT
+         BSR   WRBYT          WRITE A BYTE
+         PULS  A
+MULEXT    RTS                  .EXIT
+
+WRBYT    LDX   FCBCADR
+         LDB   ACTSTAT,X       CHECK ACTIVITY STATUS
+         CMPB  #$02
+         LBNE  ERR18
+         LDB   DATINX,X        DATA INDEX BYTE
+         CMPB  #$04            END OF BUFFER?
+         BNE   NTFLL         BRANCH IF NOT FULL
+         PSHS  A             OTHERWISE SAVE CURRENT CHAR
+         BSR   FILEWR         WRITE OUT THE SECTOR
+         PULS  A             RESTORE CURRENT CHAR
+         BCS   WERXT         BRANCH IF ERROR IN WRITE
+NTFLL    JSR   W1BYTE        WRITE A BYTE
+         BCC   WERXT         BRANCH TO EXIT IF BUFFER NOT FULL
+         LDB   #$04          LOAD B WITH 4
+         LDX   FCBCADR
+         STB   DATINX,X      SET DATA INDEX TO 4
+         CLC                 CLEAR C
+WERXT    RTS                  .EXIT
+
+.RESERVE NEXT SECTOR FOR A FILE
+RSVSEC   LDX   FCBCADR
+         CLRA
+         CLRB
+         STD   $20,X
+         STD   $42,X
+         BRA   NOTFST        NOT FIRST SECTOR OF FILE
+
+FILE_START_SECTOR           .FN 23 USE BY POPSCXX FOR WRITE A BYTE
+         LDX   FCBCADR
+         CLR   FNCODE,X
+
+.
+. WRITE TO THE DISK THE CURRENT SECTOR
+.
+FILEWR   JSR   FINDP13       FIND FILE IN FCB CHAIN
+        LBNE   RSTERR        ILLEGAL FCB
+         LDA   ATTR,X
+         BMI   ERR32
+         JSR   CHECKDC       CHECK DISK CHANGE
+         BEQ   DISKOK        DISK O.K.
+         JSR   INITFCB
+         BRA   ERR32
+
+DISKOK   LDX   FCBCADR
+         LDB   FLSTRT+1,X    FILE START POINTER
+         BNE   NOTFST        BRANCH IF NOT FIRST SECTOR
+         LDB   FLSMAP,X      IS IT RANDOM FILE?
+         BEQ   RESNXT        BRANCH IF NOT RANDOM FILE
+         CLR   FLSMAP,X
+         BSR   RESNXT        GET NEXT FREE SECTOR
+         BCS   FILEXT        BRANCH IF ERROR
+         BSR   RSVSEC        RESERVE A SECTOR
+         BCS   FILEXT        BRANCH TO EXIT IF ERROR
+         BSR   RSVSEC        RESERVE A SECTOR
+         BCS   FILEXT        BRANCH IF ERROR
+         LDX   FCBCADR
+         LDB   #$0²          LOAD B WITH 2
+         STB   FLSMAP,X      STORE FILE SECTOR MAP
+         LDD   FLSTRT,X      LOAD FILE START POINT
+         JMP   LDC82         UPDATE SECTOR MAP
+
+. NOT FIRST SECTOR
+NOTFST   BSR   FRTKSC     GET FREE SECTOR ADDR IN D
+         BCS   FILEXT     BRANCH IF DOOR OPENED ERROR
+         LDX   FCBCADR
+         STD   $40,X      AS NEXT LINK FOR CURRENT SECTOR
+         JSR   WSSECT     WRITE OUT CURRENT SECTOR
+         BCC   RESNXT     GOTO RESERVE NEXT SECTOR
+         JMP   LDBC1      CHECK FOR WHICH ERROR
+
+FRTKSC   BSR   FRESEC     POINT X TO FREE SECTOR TABLE
+         BNE   ERR32
+         LDD   $00,X
+FILEXT   RTS                  .EXIT
+
+FRESEC   LDX   FCBCADR
+         LDB   DRIVENO,X
+         LDA   #$07       EACH DRIVE HAS 7 BYTE ENTRIES
+         MUL
+         LDX   #LD41D
+         ABX
+         STX   LD41B
+         TST   6,X           SET DISK CHANGE FLAG
+         RTS                  .EXIT
+
+ERR32    LDB   #32            ERROR 32 -DISK DOOR HAS OPENED
+         LDX   FCBCADR
+         CLR   ACTSTAT,X      CLEAR ACTIVITY STATUS ,DISABLE ANY WRITE
+         BRA   WRER2        ERROR EXIT
+
+RESNXT   BSR   FRTKSC     GET FREE SECTOR ADDR IN D
+         BCS   EREXIT
+         BNE   UPDATF        NOW UPDATE FILE INFO
+         LDB   #$07          ALL AVAILABLE DISK SPACE HAS BEEN USED
+WRER2    SEC                 SET C
+EREXIT   RTS                  .EXIT
+
+. UPDATE FILE INFORMATION
+UPDATF   LDX   FCBCADR
+         STD   FILEND,X      STORE T/S OF RESERVED SECTOR AS FILE END
+         TST   FLSTRT+1,X    START ADDR ASSIGN YET?
+         BNE   SKIPP1        YES SKIP
+         STD   FLSTRT,X      STORE CURRENT T/S AS FILE START
+SKIPP1   INC   FLSIZE+1,X    INREMENT FILE SIZE
+         BNE   SKIPS1
+         INC   FLSIZE,X
+SKIPS1   TST   FLSMAP,X      FILE SECTOR MAP?
+         BEQ   SEQFIL        BRANCH IF SEQUENTIAL FILE
+         JSR   LDC43         UPDATE RANDOM FILE SECTOR MAP
+         BCS   WRER2         BRANCH IF ERROR
+         LDX   FCBCADR
+         LDD   FILEND,X      PICK UP CURRENT T/S
+. NOW UPDATE FREE SECTOR TABLE
+SEQFIL   JSR   RDSECT        READ THE RESERVED SECTOR
+         BCS   WRER2         BRANCH IF ERROR
+         LDX   FCBCADR
+         LDD   $40,X         GET FORWARD LINK
+         PSHS  B,A
+         BSR   FRESEC        POINT X TO FREE SECTOR TABLE
+         PULS  B,A
+         STD   $00,X        STORE IN FREE SECTOR TABLE
+         BNE   SKIPT1       BRANCH IF NOT RUN OUT OF FREE SPACE
+.        STD   $02,X        CLEAR FREE CHAIN,END PTR AND FREE SPACE COUNT
+         CLR   2,X
+         CLR   3,X
+         CLR   4,X
+         CLR   5,X
+.        STD   $04,X
+         BRA   SKIPF
+
+. SUBTRACT 1 FROM FREE SPACE
+SKIPT1   LDY   $04,X         DECREMENT FREE SPACE COUNT
+         LEAY  -$01,Y        DECREMENT Y BY 1
+         STY   $04,X
+SKIPF    CLRA
+         LDX   FCBCADR
+         INC   CURRNO+1,X    INREMENT CURRENT RECORD COUNT
+         BNE   SKIPR
+         INC   CURRNO,X
+SKIPR    CLRB
+.NOW CLEAR THE FCB BUFFER
+FCBCR    STA   $40,X
+         LEAX  $01,X         INCREMENT X BY ONE
+         DECB                .DECREMENT B BY 1
+         BNE   FCBCR
+         LDX   FCBCADR
+         LDD   CURRNO,X       CURRENT RECORD NUMBER
+         STD   SECBUF+2,X     PLACE IN LOGICAL REC NO OF BUFFER
+         CLC
+         RTS                  .EXIT
+
+.
+. FN 16 OPEN SYSTEM INFORMATION RECORD
+.
+OSIREC   CLRB
+         PSHS  B
+         LDB   #$03          LOAD B WITH 3
+         BRA   OPNINF         BRANCH TO OPEN INFO
+
+         LDX   LD415
+         STX   LD413
+.
+. FN 6 OPEN DIRECTORY
+.
+DOPEN    LDB   LD413
+         PSHS  B
+         LDB   LD414
+OPNINF   LDX   FCBCADR
+         STB   $41,X          STORE SECTOR ADDR
+         PULS  B
+         STB   $40,X          STORE TRACK ADDR
+         CLRB
+         STB   DATINX,X       CLEAR DATA INDEX
+         RTS                  .EXIT
+
+.
+. FN 7 GET INFORMATION RECORD(OR GET DIRECTORY ENTRY)
+.
+GETIR    LDX   FCBCADR
+         LDB   DATINX,X      LOAD DATA INDEX BYTE
+         BNE   SKREAD        BRANCH IF NOT END OF SECTOR
+         JSR   NXTSEC        READ IN NEXT SECTOR
+         BCS   GTEXT         BRANCH IF ERROR
+         LDX   FCBCADR
+LD852    LDA   #$10
+         STA   $22,X         SET DATA INDEX TO $10
+         LDD   CURPOS,X      CURRENT T/S
+         STD   CDIRAD,X      CURRENT DIR ADDR
+SKREAD   LDA   DATINX,X      CURRENT DATA INDEX
+         STA   CDIRAD+2,X    STORE AS CURRENT DIR INDEX
+         LDB   #$18          LOAD B WITH COUNT OF 24
+READIR   PSHS  X,B           READ 24 BYTES OF DIR ENTRY INTO FILENAME AREA
+         JSR   REBYT1        READ A BYTE
+         PULS  X,B
+         STA   $04,X
+         LEAX  $01,X         INCREMENT X BY ONE
+         DECB                .DECREMENT B BY 1
+         BNE   READIR
+         CLC
+GTEXT    RTS                  .EXIT
+
+.
+. FN 8 PUT INFO REC(OR WRITE DIRECTORY ENTRY)
+.
+PUTIR    LDX   FCBCADR
+         LDA   CDIRAD+2,X    LOAD CURRENET DIR INDEX
+         STA   DATINX,X      STORE AS CURRENT DATA INDEX
+         LDB   #$18          LOAD B WITH COUNT OF 24
+WRTDIR   PSHS  X,B           WRITE 24 BYTES OF DIR ENTRY
+         LDA   FILENAME,X
+         JSR   WRBYT         WRITE A BYTE
+         PULS  X,B
+         LEAX  $01,X         INCREMENT X BY ONE
+         DECB                .DECREMENT B BY 1
+         BNE   WRTDIR
+         JMP   WSSECT        NOW DO THE ACTUAL WRITING TO DISK
+
+. FIND DIRECTORY ENTRY
+. CALL BY OPEN FILE ROUTINE
+.
+FDIRET   LDX   FCBCADR
+         LDA   DRIVENO,X        GET DRIVE NUMBER
+         STA   RNDINX,X      RANDOM INDEX BYTE
+         LDA   LD417
+         TST   LD41A
+         BNE   GNXDIR       GET THE MATCHING DIRECTORY ENTRY
+         STA   DRIVENO,X
+         LDX   LD415
+         STX   LD413
+FDIR1    CMPX  #$05         IS T/S =0005?
+         BEQ   SEC05        BRANCH IF TRUE
+         BSR   GNXDIR       GET THE MATCHING DIRECTORY ENTRY
+         BLS   FDIREX
+         BRA   FDIR1
+
+SEC05    LDX   FCBCADR
+         LDA   RNDINX,X      RANDOM INDEX BYTE
+         STA   DRIVENO,X
+         BPL   GNXDIR       GET THE MATCHING DIRECTORY ENTRY
+NXDRV    JSR   FNDRIVE        FIND NEXT AVAILABLE DRIVE
+         BCS   ENDIR          BRANCH IF NO DRIVE AVAIL
+         BSR   GNXDIR       GET THE MATCHING DIRECTORY ENTRY
+         BLS   FDIREX
+         JSR   LDDAE        MOVE FN/EXT FROM FCB+$24 TO FCB+4
+.                           (FROM WORK BUFFER TO ACTUAL FILENAME AREA)
+         BRA   NXDRV
+
+. GET THE MATCHING DIRECTORY ENTRY
+. ON RETURN IF THERE IS AN ENTRY THEN Z IS SET OTHERWISE CLEAR
+
+GNXDIR   LDX   FCBCADR
+         CLR   LD41A
+         JSR   MOVNAM       MOVE NAME FROM FCB+4 TO FCB+$24
+         JSR   DOPEN        OPEN DIRECTORY
+.GET NEXT ENTRY AND COMPARE
+NXTDIR   JSR   GETIR        GET DIRECTORY ENTRY
+         BCC   DIREXS        BRANCH IF ENTRY EXIST
+         CMPB  #$08          END OF DIRECTORY?
+         BEQ   ENDIR          END OF DIRECTORY
+         SEC
+FDIREX   RTS                  .EXIT
+
+.DIRECTORY EXIST- NOW COMPARE THE NAME
+DIREXS   LDX   FCBCADR
+         LDA   FILENAME,X
+         BEQ   DIREND          BRANCH IF END OF DIRECTORY
+         BPL   CURENT         BRANCH IF ENTRY IS ACTIVE
+         BSR   UPDEL          UPDATE THE FIRST DELETED ENTRY IN FCB
+.        BRA   NXTDIR
+CURENT   JSR   CMPNAM         COMPARE THE NAMES
+         BNE   NXTDIR
+         CLC
+         RTS                  .EXIT
+
+.END OF DIRECTORY
+DIREND   BSR   UPDEL          UPDATE THE FIRST DELETED ENTRY IN FCB
+ENDIR    ANDCC #$FB           SET NOT EQUAL CONDITION
+         CLC                  CLEAR C--NO ERROR
+         RTS                  .EXIT
+
+UPDEL    LDA   FSTDIR+1,X      GET FIRST DELETED ENTRY
+         BNE   UPDEXT          IF THERE ALREADY EXIST AN ENTRY BRANCH
+         LDD   CDIRAD,X       COPY CURRENT DIR
+         STD   FSTDIR,X       INTO FIRST DELETED ENTRY
+         LDA   CDIRAD+2,X     CURRENT DIR INDEX
+         STA   FSTDIR+2,X     DIR ENTRY INDEX
+UPDEXT   RTS                  .EXIT
+
+LD917    LDX   FCBCADR
+         JSR   CHECKDC       CHECK DISK CHANGE
+         BEQ   DISKNC     BRANCH IF NO CHANGE
+         JSR   INITFCB
+DISKNC
+         JSR   FRESEC     POINT X TO FREE SECTOR TABLE
+         BEQ   OLDISK            IF NO CHANGE IN DISK
+         BSR   RDSIR         READ SECTOR 3 OF DISK
+         BCS   RDESX         BRANCH IF ERROR
+         LDB   #$06          LOAD B WITH COUNT OF 6
+         LDY   FCBCADR       COPY SIX BYTES FROM SECTOR 3 TO FREE SECTOR TABLE
+         LDX   LD41B
+RDS3R    LDA   $5D,Y
+         LEAY  $01,Y         INCREMENT Y BY 1
+         STA   $00,X+
+         DECB                .DECREMENT B BY 1
+         BNE   RDS3R
+         CLR   0,X
+OLDISK   CLC
+RDESX    RTS                  .EXIT
+
+RDSIR    JSR   OSIREC
+         JSR   NXTSEC        READ IN NEXT SECTOR
+         BCS   RDSEXT        BRANCH IF ERROR IN READING
+         LDX   FCBCADR
+         LDB   #$10          LOAD B WITH DATA INDEX OF 10
+         STB   DATINX,X      STORE DATA INDEX
+RDSEXT   RTS                  .EXIT
+
+.REWRITE SYSTEM INFO RECORD(OR SECTOR 3)
+RWSIR    JSR   FRESEC     POINT X TO FREE SECTOR TABLE
+         BSR   RDSIR
+         BCS   RDSEXT          BRANCH IF ERROR
+         LDB   #$06          LOAD B WITH COUNT OF 6
+         LDY   FCBCADR
+         LDX   LD41B
+COPY6    LDA   $00,X+
+         STA   $5D,Y
+         LEAY  $01,Y         INCREMENT Y BY 1
+         DECB                .DECREMENT B BY 1
+         BNE   COPY6
+         JSR   WSSECT
+         BCC   RDSEXT        BRANCH TO EXIT IF NO ERROR
+         JMP   LDBC1         CHECK FOR WHICH ERROR
+
+ZZZZC    LDX   FCBCADR
+         LDA   #$02
+         STA   $02,X
+         LDD   $2F,X
+         STD   $1E,X
+         JSR   RSSECT
+         BCS   LOOPA
+         JSR   PUTIR
+         BCC   ZCEXIT
+         JMP   LDBC1         CHECK FOR WHICH ERROR
+
+LOOPA    LDB   #$0A          LOAD B WITH 10
+ZCEXIT   RTS                  .EXIT
+

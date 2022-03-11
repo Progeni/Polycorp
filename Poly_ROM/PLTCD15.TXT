@@ -1,0 +1,332 @@
+.PLRCD00       1 12 81       
+
+I_O_INIT
+         LDX   #I_O_SETUPTBL . POINT TO START OF TABLE, INCLUDING COMMS ADLD
+         BRA   IOIN3         & GO
+
+I_O_INIT2
+         LDX   #I_O_SETUPTBL2 .POINT TO NON-COMMS PART OF TABLE &GO
+IOIN3    LDY   #$E000        LOAD BASE ADDRESS
+I_O_LOOP LDD   ,X++          GET ADDR. OFFSET & DATA TO A,B RESPECTIVELY
+         STB   A,Y           STORE IN $E000 + ADDR. OFFSET
+         CMPX  #ITBL_END      FINISHED YET
+         BLO   I_O_LOOP      NO:- REPEAT FOR NEXT ENTRY IN TABLE
+         RTS
+
+
+I_O_SETUPTBL
+         .ADLC CHIP (6854)
+         FCB   $30,$C1       RESET,AC=1
+         FCB   $32,$A8       "01" IDLE, LOOP MODE
+         FCB   $36,$1E       8 BIT WORD LENGTH
+         FCB   $30,$C0       RESET, AC=0
+         FCB   $32,$81       PRIORITISED STATUS ENABLE, EXTEND MODE
+         FCB   $30,$03       RELEASE, AC=1, RECEIVE INTERRUPT ENABLED
+
+I_O_SETUPTBL2
+         . VIDEO PIA (6821)
+         FCB   1,00          CLR VIDEO PIA CR's
+         FCB   3,00           "
+         FCB   0,$FF         SET BOTH HALVES OF VID PIA OUTWARDS
+         FCB   2,$FF          "
+         FCB   1,$04         SELECT DATA REGISTERS
+         FCB   3,$04         "
+         FCB   0,$0E         SEL TTXT1 SCREEN FOR DISPLAY
+         FCB   2,$0C          ONLY
+         .KEYBOARD PIA (6821)
+         FCB   $F,00         CLR KBD C/R TO ACCESS DDR
+         FCB   $E,00         KEYBD PIA = INPUT
+         FCB   $D,$3C        NOT-T/B HIGH (CA2) AND NO INTERRUPTS
+         FCB   $F,$3F        NOT-BCS HIGH (CB2) SEL 24 LINE MODE
+                             . AND KEYBOARD INTERRUPTS ON RISING EDGE
+         .TIMER (6840)
+         FCB   $21,0         ACCESS TIMER REG 3
+         FCB   $20,0         CLEAR IT
+         FCB   $21,1         ACCESS TIMCR1
+         FCB   $20,CLOCKRUN  RUN CLOCK
+         FCB   $21,DIV1MHZ   ACCESS TIMER3, AND SET #2 TO 100 Hz OUTPUT
+         FCB   $22,0         SET T1 TO DIVIDE 100 Hz BY 100
+         FCB   $23,99         "  "  "    "    "  "  "  "
+         FCB   $24,$13       SET T2 TO DIVIDE 1 MHz BY 10480 ( N=5023=$139F )
+         FCB   $25,$9F        "  "  "    "    "  "  "    "         "
+   
+         .RS232C (6850) PORT
+         FCB   $04,$03       MASTER RESET
+         FCB   $04,$11       INITIALISE
+ 
+ITBL_END
+
+.PLRD00        19.11.81      1982 RELEASE MAIN LINE OF ROM
+
+
+
+START
+
+         LDS   #SCREEN2+1024 PUT STACK INTO (SPARE) FIXED RAM TO BEGIN
+         LDA   #DIRECT       SET DIRECT PAGE REGISTER
+         TFR   A,DP
+         LDX   #SCREEN1      X POINTS TO START OF 2K RAM
+         CLRA
+STA1     STA   ,X+           CLEAR 2K RAM
+         CMPX  #SCREEN1+2048 IS IT THE END
+         BLO   STA1          NO,LOOP BACK
+         BSR   I_O_INIT      INIT I/O DEVICES INCLUDING ADLC FIRST TIME UP
+         LDA   #$80          ADLC must extend until loop setup
+         STA   EXTEND
+         LDA   ACIAS        Read the status register
+         CMPA  #2            Something attached to port
+         BEQ   LOGOFF_ENTRY
+         CMPA  #8
+         BEQ   LOGOFF_ENTRY
+         INC   PORTFLG       No port there
+
+LOGOFF_ENTRY
+         SEI                 DISABLE INTERRUPTS
+                             . THE DAT INITIALISATION
+
+.    The DAT set up program  Dynamic Address Translator.
+.    Note a table is set up to be copied to the DAT area.
+.
+DAT      LDX   #MAPTBL       Point X at the DAT table.
+         LDY   #DATRAM       Point Y at the REAL DAT table.
+         JSR   WRITEMAP      COPY INTO MAP RAM
+         INC   MAPONE        Select map ONE..
+
+         LDS   #STACK-12     LOAD STACK POINTER FOR REAL
+INITVARS
+         LDX   #SCREEN1      BEGBASE SCREEN 1
+         LDU   #SCREEN1+959  ENDBASE SCREEN 1
+         LDY   #TTXT1        Points to TELETEXT 1 variables
+         STY   CURSVARS
+         CLRB                First time round B is clear
+INIT1    STX   0,Y++         BEGBASE
+         STU   0,Y++         ENDBASE
+         STX   0,Y++         BEGINS
+         STU   0,Y++         END
+         LDA   #23 
+         STA   0,Y+          BOTTOM
+         LDA   #NUMTVARS-NUMTZER CLEAR REST OF VARIABLES TO ZERO
+INIT2    CLR   0,Y+
+         DECA
+         BNE   INIT2
+         TSTB                Is it the first time
+         BNE   INITED        Branch if not
+         LEAX  $400,X        BEGBASE for screen 2
+         LEAU  $400,U        ENDBASE for screen 2
+         LDB   #1
+         BRA   INIT1         Initialise screen 2 vars
+INITED
+         LDX   #FLAGS        Now clear flags to zero
+         STB   0,X+          CLOCK FLAG CLOCK RUNNING,NOT DISPLAYED
+         STB   0,X+          LOGONFLG
+         STB   0,X+          RCVFLG
+         DECA
+         STA   0,X+          COMTIM=$FF
+CLRZER   CLR   0,X+          Clear flags to zero
+         CMPX  #ENDZERO      Done
+         BLO   CLRZER        No
+.                            Yes
+         LDX   #VECTBEG      Now set vars in the user mem space !
+VLP      STA   ,X+           Set vectors to $FFFF
+         CMPX  #VECTEND      Done ?
+         BLO   VLP           No
+         LDA   #"0"          Now set soft key table
+SKLP     STA   ,X+           
+         INCA
+         CMPA  #"9"
+         BLS   SKLP          Table contents are $30 to $39 inclusive
+KBMCL    CLR   ,X+           Now clear the key bitmap
+         CMPX  #KBMEND       Done ?
+         BLO   KBMCL         No
+.                            yes
+         TFR   S,U           Mark stack
+         INC   LOGONFLG      INDICATE IN LOGON SCREEN
+         JSR   I_O_INIT2     INITIALISE I/O DEVICES EXCEPT THE ADLC
+         CLI                 ENABLE INTERRUPTS
+.:.**.*.*>*************ADDED TO ALLOW WARM START IN BASIC
+        
+         LDB   KEYBD         GET KEYBOARD
+. IF W KEY IS PRESSED WHEN RESET PRESSED,DO A WARM START OF BASIC
+         ANDB  #$DF          CONVERT TO UPPER CASE
+         CMPB  #$D7          "W" WITH KEY STILL PRESSED?
+         BNE   LOGON         NO NORMAL START
+         LDD   #BASICWARM    YES WARM START FOR BASIC
+         JMP   GOPROG
+
+
+
+......................................................................
+.
+.
+.         LOGON PROCEDURE
+.
+.
+......................................................................
+
+LOGON    CLR   EXITFLG       BREAK KEY NOT DEPRESSED YET!!
+         LDY   #TTXT1
+         JSR   CLRSCN        CLEAR SCREEN 1
+         LDX   BEGINS,Y      FIRST ADDRESS
+         LDD   #MAGENTA*256+NEWBAK COLOUR OF BACKGROUND
+MAG2     STD   0,X           SET UP SCREEN
+         LEAX  40,X          NEXT LINE
+         CMPX  ENDS,Y        ALL LINES DONE?
+         BLO   MAG2          NO
+
+.MESSAGE TO SCREEN
+.
+         LDX   #VERMSG       VERSION MESSAGE
+         BSR   PMESSAG1
+.
+         LDD   #$0608
+         BSR   PMESSAGE
+         FCB   DOUBLEHT,BLUE,'POLY UNIT AVAILABLE',NUL
+.
+.        GET USER'S INITIALS
+.
+         LDD   #$0E06
+         BSR   PMESSAGE
+         FCB   YELLOW,"Type Your",FLASH,"INITIALS",NUL
+         LDD   #$100A
+         BSR   PMESSAGE
+         FCB   YELLOW,"and Press ",$A0,$C5,$CE,$D4,$C5,$D2,$A0,NUL   "ENTER" INVERSE
+         LDD   #$120A
+         BSR   PMESSAGE
+         FCB   YELLOW,'Initials',WHITE,SO,NUL
+         LDX   #USERNAME     ARRAY FOR FIRST NAME
+         BRA   GETNAME
+  
+INTERNAL
+         LDD   #BASCROM1
+         JMP   GOPROG
+   
+.......................................................................
+.
+.        PMESSAGE AND PMESSAG1
+.
+.
+PMESSAGE LDY   CURSVARS
+         STD   CURSOR,Y      CHANGE CURSOR POSITION
+PMESSAGE2
+         PULS  X             GET POSITION OF FIRST CHARACTER
+         BSR   PMESSAG1      PRINT MSG AT X
+         JMP   ,X            UPDATED X IS NOW RETURN ADR
+
+PMESSAG1
+PM_LOOP  LDA   ,X+           GET NEXT CHARACTER
+         BEQ   PM_END        LAST CHARACTER IS A NULL
+         JSR   VDU           PRINT IT
+         BRA   PM_LOOP       GO ROUND AGAIN
+PM_END   RTS
+.......................................................................
+GETNAME  JSR   GET4          GET 4 CHARS
+         STA   NAMEPASS     NAME AND PASSWORD
+         LDD   #$0E11        WRITE "PASSWORD"
+         BSR   PMESSAGE
+         FCB   "PASSWORD",NUL
+         LDD   #$140A
+         BSR   PMESSAGE
+         FCB   SI,YELLOW,'Password',CONCEAL,SO,NUL
+         LDX   #PASSWORD
+.                            B CONTAINS $0B FROM CURSOR ABOVE TO GIVE NO ECHO
+         BSR   GET4         GET PASSWORD
+         STA   NAMEPASS+1
+
+         JSR   CLRSCN
+         TST   ADDR          ONLINE?
+         BEQ   INTERNAL      NO
+         TST   LODFLAG       B/C LOAD STARTED?
+         BMI   WTLOD         YES
+         CLR   ENDLOD
+ASKLOAD  INC   LODFLAG
+         CLRD
+         JSR   PMESSAGE
+         FCB   SI,RED,DOUBLEHT,'AWAITING LOAD',SO,NUL
+         LDB   #LOADREQ      MSG TYPE
+         LDX   #DOSFLG       INDICATE WHETHER DOS PRESENT
+         LEAY  1,X
+         JSR   SEND_MSG
+         JSR   LOAD_INIT
+WTLOD    LDA   ENDLOD        LOAD FINISHED?
+        LBMI   LOGOFF_ENTRY  DISK ERROR OCCURRED
+         CMPA  #$7F
+         BEQ   LGNGO
+         CMPA  ADDR
+         BEQ   LGNGO
+         TST   MSGFLG        ERRORS?
+         BGT   ASKLOAD       YES
+         BRA   WTLOD
+
+. NOW SEE IF DOS IS ALREADY LOADED
+
+LGNGO    INC   DOSFLG        LOADED
+         CLR   LODFLAG       LOAD FINISHED
+         LDD   #STRTADR      ALWAYS START @$C100
+
+
+
+GOPROG   STD   UPC,U
+LOGONOUT CLR   LOGONFLG
+         LDA   #$C0
+         STA   UCC,U         CC IS $C0
+         CLR   UDP,U
+         JMP   SWI_EXIT
+************************************************************************
+.......................................................................
+
+GET4     LDB   #4
+GTLP     JSR   CHRIN         GET A CHARACTER
+         TST   EXITFLG       EXIT  KEY ?
+         BNE   GETEXIT       YES
+         CMPA  #CR           ENTER KEY?
+         BEQ   GETEND        YES
+         CMPA  #BS           BACKSPACE ?
+         BNE   NOTBS         NO - SKIP
+         CMPB  #4            DONT BACK UP IF ALREADY AT START OF BUF
+         BHS   GTLP          - IGNORE
+         INCB                BACK UP POINTER
+         DEX                 Decrement pointer
+         PSHS  X
+         JSR   PMESSAGE2      ECHO BS,SPACE,BS
+         FCB   BS," ",BS,NUL
+         PULS  X
+         BRA   GTLP
+
+NOTBS
+         ANDA  #$5F          CONVERT TO UPPER CASE
+         CMPA  #"A"          A-Z OK, IGNORE OTHERS
+         BLO   GTLP          IGNORE
+         CMPA  #"Z"
+         BHI   GTLP
+         TSTB                PAST END OF BUFF ?
+         BEQ   GTLP          IGNORE
+         STA   0,X+          PUT CHAR IN BUFFER
+         DECB                DECR COUNTER
+         JSR   VDU
+         BRA   GTLP          AND NEXT CHAR
+
+GETEND   LDA   #" "          SET REMAINING CHARS TO SPACES
+PTSLP    TSTB                DONE ?
+         BEQ   GETOUT        YES
+         STA   0,X+          STORE SPACE
+         DECB
+         BRA   PTSLP
+GETOUT   LEAX  -4,X          POINT TO START OF NAME
+         LDB   #4            DO IT 4 TIMES
+         CLRA
+GETE     ROLA
+         ADCA  0,X+
+         DECB
+         BNE   GETE          ANOTHER TIME IF NOT ZERO
+         RTS
+
+GETEXIT  LEAS  2,S           REPAIR STACK
+         JMP   LOGON         JUMP TO THE START OF THE LOGON PROCEDURE
+
+
+*************************************************************************
+
+
+
+
+************************************************************************
