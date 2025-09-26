@@ -16,6 +16,11 @@ Versions of the BASIC interpreter we've seen:
 * POLYBASIC V3.1
 * POLYBASIC V3.4
 
-Versions of the POLY BIOS appear to be versioned by the build date.
+Versions of the POLY BIOS are inconsistently versioned.  Most recently they used he build date located at the start of ROM.  We've seen:
+
+* 831122 (Version 3.4 standalone with disk drive attached)
+* 830519 (Verison 3.4 with networking)
+* V3.1 (Vesion 3.1 for Poly 2)
+* And other versions (Version 2.3, Version 3.0)
 
 Versions of POLYSYS.SYS (Poly) appear to have non-sequential version numbers - we're still trying to understand how it worked.
